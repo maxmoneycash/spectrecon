@@ -19,11 +19,16 @@ def _rows(con: duckdb.DuckDBPyConnection, sql: str, params: list | None = None):
 
 
 def _haversine(lat: float, lon: float, alias: str = "s") -> str:
+    return _haversine_expr(str(lat), str(lon), alias)
+
+
+def _haversine_expr(lat_expr: str, lon_expr: str, alias: str) -> str:
+    """Haversine km from {alias}.lat/lon to the given SQL expressions."""
     return (
         "6371 * 2 * asin(sqrt("
-        f"power(sin(radians({alias}.lat - {lat}) / 2), 2) + "
-        f"cos(radians({lat})) * cos(radians({alias}.lat)) * "
-        f"power(sin(radians({alias}.lon - ({lon})) / 2), 2)))"
+        f"power(sin(radians({alias}.lat - ({lat_expr})) / 2), 2) + "
+        f"cos(radians({lat_expr})) * cos(radians({alias}.lat)) * "
+        f"power(sin(radians({alias}.lon - ({lon_expr})) / 2), 2)))"
     )
 
 
@@ -156,6 +161,85 @@ def towers(
         """,
         params,
     )
+
+
+def gaps(
+    con: duckdb.DuckDBPyConnection,
+    lat: float,
+    lon: float,
+    radius_km: float,
+    coverage_km: float = 0.25,
+    alias: str = "s",
+    table: str = "uls.sites",
+) -> list:
+    """Rows of `table` near a point with no capture observation nearby."""
+    dlat = radius_km / 111.0
+    dlon = radius_km / max(1.0, 111.0 * abs(math.cos(math.radians(lat))))
+    has_obs = con.execute(
+        "SELECT count(*) FROM information_schema.tables "
+        "WHERE table_schema='capture' AND table_name='observations'"
+    ).fetchone()[0]
+    uncovered = ""
+    if has_obs:
+        cov_deg = coverage_km / 111.0
+        uncovered = f"""
+            AND NOT EXISTS (
+                SELECT 1 FROM capture.observations o
+                WHERE o.lat BETWEEN {alias}.lat - {cov_deg}
+                      AND {alias}.lat + {cov_deg}
+                  AND o.lon BETWEEN {alias}.lon - {cov_deg}
+                      AND {alias}.lon + {cov_deg}
+                  AND {_haversine_expr('o.lat', 'o.lon', alias)} <= {coverage_km}
+            )
+        """
+    return uncovered, (
+        f"{alias}.lat BETWEEN {lat - dlat} AND {lat + dlat} "
+        f"AND {alias}.lon BETWEEN {lon - dlon} AND {lon + dlon} "
+        f"AND {_haversine_expr(str(lat), str(lon), alias)} <= {radius_km}"
+    )
+
+
+def coverage_gaps(
+    con: duckdb.DuckDBPyConnection,
+    lat: float,
+    lon: float,
+    radius_km: float,
+    coverage_km: float = 0.25,
+) -> dict:
+    """Pre-drive planner: licensed sites/towers in a region with NO captured
+    observation within coverage_km — the places worth driving next."""
+    s_unc, s_region = gaps(con, lat, lon, radius_km, coverage_km, alias="s")
+    sites = _rows(
+        con,
+        f"""
+        SELECT {_haversine(lat, lon)} AS dist_km, s.call_sign, s.lat, s.lon,
+               s.location_city, s.location_state, s.location_name,
+               l.entity_name, l.radio_service_code
+        FROM uls.sites s
+        JOIN uls.licenses l USING (unique_system_identifier)
+        WHERE {s_region} {s_unc}
+        ORDER BY dist_km
+        """,
+    )
+    towers: list = []
+    has_towers = con.execute(
+        "SELECT count(*) FROM information_schema.tables "
+        "WHERE table_schema='asr' AND table_name='towers'"
+    ).fetchone()[0]
+    if has_towers:
+        t_unc, t_region = gaps(con, lat, lon, radius_km, coverage_km, alias="t")
+        towers = _rows(
+            con,
+            f"""
+            SELECT {_haversine(lat, lon, alias='t')} AS dist_km,
+                   t.registration_number, t.owner_name, t.structure_type,
+                   t.height_overall_m, t.city, t.state, t.lat, t.lon
+            FROM asr.towers t
+            WHERE {t_region} {t_unc}
+            ORDER BY dist_km
+            """,
+        )
+    return {"sites": sites, "towers": towers}
 
 
 def stats(con: duckdb.DuckDBPyConnection):

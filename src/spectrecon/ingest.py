@@ -87,8 +87,15 @@ def parse_wigle_csv(path: Path) -> list[dict]:
 
 
 def import_capture(db_path: Path, csv_path: Path) -> int:
-    """Load a WiGLE CSV into capture.observations. Returns rows imported."""
-    rows = parse_wigle_csv(csv_path)
+    """Load a wardriving capture into capture.observations.
+
+    Dispatches on file type: .kismet (Kismet SQLite log) or WiGLE CSV.
+    Returns rows imported.
+    """
+    if csv_path.suffix.lower() == ".kismet":
+        rows = parse_kismet(csv_path)
+    else:
+        rows = parse_wigle_csv(csv_path)
     if not rows:
         return 0
     con = duckdb.connect(str(db_path))
@@ -110,6 +117,103 @@ def import_capture(db_path: Path, csv_path: Path) -> int:
     finally:
         con.close()
     return len(rows)
+
+
+def parse_kismet(path: Path) -> list[dict]:
+    """Parse a Kismet .kismet SQLite log: one row per device at avg position.
+
+    kismetdb stores per-device aggregates in the devices table; the WiFi SSID
+    lives inside the per-device JSON blob under dot11.device.
+    """
+    import json
+    import sqlite3
+    from datetime import datetime, timezone
+
+    rows: list[dict] = []
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        cur = con.execute(
+            "SELECT devmac, phyname, strongest_signal, avg_lat, avg_lon, "
+            "       first_time, device FROM devices"
+        )
+        for devmac, phyname, sig, lat, lon, first_time, blob in cur:
+            if lat is None or lon is None or (lat == 0 and lon == 0):
+                continue  # no GPS fix for this device
+            lat, lon = float(lat), float(lon)
+            if abs(lat) > 90 or abs(lon) > 180:  # legacy fixed-point storage
+                lat, lon = lat / 1e6, lon / 1e6
+            ssid, auth = "", ""
+            try:
+                dev = json.loads(blob) if isinstance(blob, (str, bytes)) else {}
+                d11 = dev.get("dot11.device", {})
+                ssid = (d11.get("last_beaconed_ssid")
+                        or d11.get("last_beaconed_ssid_record", {}).get("last_ssid")
+                        or "")
+                crypt = d11.get("last_beaconed_ssid_record", {}).get("crypt_string")
+                auth = crypt or ""
+            except (ValueError, AttributeError):
+                pass
+            phy = (phyname or "").lower()
+            obs_type = ("BLE" if "btle" in phy
+                        else "BT" if "bluetooth" in phy
+                        else "WIFI" if "802.11" in phy else phyname or "?")
+            try:
+                ts = datetime.fromtimestamp(int(first_time),
+                                            tz=timezone.utc).strftime(
+                                                "%Y-%m-%d %H:%M:%S")
+            except (TypeError, ValueError, OSError):
+                ts = ""
+            rows.append({
+                "bssid": devmac.upper(), "ssid": ssid, "auth_mode": auth,
+                "first_seen": ts, "channel": None,
+                "rssi": int(sig) if sig is not None else None,
+                "lat": lat, "lon": lon, "accuracy_m": None, "obs_type": obs_type,
+            })
+    finally:
+        con.close()
+    return rows
+
+
+def load_oui(db_path: Path, csv_path: Path) -> int:
+    """Load the IEEE MA-L registry into ref.oui (prefix -> vendor)."""
+    con = duckdb.connect(str(db_path))
+    try:
+        con.execute("CREATE SCHEMA IF NOT EXISTS ref")
+        con.execute("CREATE OR REPLACE TABLE ref.oui AS "
+                    "SELECT * FROM read_csv(?, header=true, "
+                    "columns={'registry': 'VARCHAR', 'assignment': 'VARCHAR', "
+                    "         'vendor': 'VARCHAR', 'address': 'VARCHAR'})",
+                    [str(csv_path)])
+        n = con.execute("SELECT count(*) FROM ref.oui").fetchone()[0]
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_oui_prefix ON ref.oui (assignment)"
+        )
+    finally:
+        con.close()
+    return n
+
+
+def enrich_vendors(con: duckdb.DuckDBPyConnection, devices: list[dict]) -> None:
+    """Add vendor + MAC-randomization flags to debrief devices in place.
+
+    Locally administered addresses (second nibble in 2/6/A/E) are how phones
+    randomize WiFi/BLE MACs — wardrivers use this to split fixed
+    infrastructure from transient handsets.
+    """
+    has_oui = con.execute(
+        "SELECT count(*) FROM information_schema.tables "
+        "WHERE table_schema='ref' AND table_name='oui'"
+    ).fetchone()[0]
+    vendors = {}
+    if has_oui:
+        vendors = dict(con.execute("SELECT assignment, vendor FROM ref.oui").fetchall())
+    for d in devices:
+        hexparts = re.sub(r"[^0-9A-Fa-f]", "", d["bssid"])
+        prefix = hexparts[:6].upper()
+        d["vendor"] = vendors.get(prefix)
+        d["randomized_mac"] = bool(
+            len(hexparts) >= 2 and int(hexparts[1], 16) & 0x2
+        )
 
 
 def debrief(
@@ -214,6 +318,13 @@ def debrief(
                  or d["nearest_tower_km"] > anomaly_km)
         ]
         anomalies.sort(key=lambda d: d["bssid"])
+
+        enrich_vendors(con, devices)
+        for a in anomalies:
+            match = next((d for d in devices if d["bssid"] == a["bssid"]), None)
+            if match:
+                a["vendor"] = match.get("vendor")
+                a["randomized_mac"] = match.get("randomized_mac")
 
         attributions = attribute_ssids(con, devices) if has_sites else []
         return {

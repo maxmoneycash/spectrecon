@@ -80,6 +80,14 @@ def download(
         raise typer.BadParameter("name services or pass --all")
     for s in targets:
         try:
+            if s in dl.EXTRA_DOWNLOADS:
+                path = dl.download_extra(s, RAW_DIR, force=force)
+                if s == "oui":
+                    n = ingest_mod.load_oui(DB_PATH, path)
+                    console.print(f"[green]{s}[/green] -> {path} ({n:,} vendors)")
+                else:
+                    console.print(f"[green]{s}[/green] -> {path}")
+                continue
             path = dl.download_service(s, RAW_DIR, force=force)
             console.print(f"[green]{s}[/green] -> {path}")
         except dl.DownloadError as e:
@@ -271,6 +279,49 @@ def watch(
           title="watch feed")
 
 
+@app.command()
+def gaps(
+    coords: str = typer.Argument(..., help="Center point as 'lat,lon'."),
+    radius: float = typer.Option(25.0, "--radius-km"),
+    coverage_m: float = typer.Option(250.0, "--coverage-m",
+                                   help="A site counts as covered if any capture "
+                                        "observation is within this distance."),
+    html: Optional[Path] = typer.Option(None, "--html",
+                                        help="Write a target map as Leaflet HTML."),
+    db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt,
+) -> None:
+    """Pre-drive planner: licensed sites/towers with no capture coverage.
+
+    Compares the licensing graph against every imported wardriving capture
+    and lists what you have NOT sniffed yet — the next drive's target list.
+    """
+    try:
+        lat_s, lon_s = coords.replace(" ", "").split(",")
+        lat, lon = float(lat_s), float(lon_s)
+    except ValueError:
+        raise typer.BadParameter("coords must be 'lat,lon', e.g. 34.0522,-118.2437")
+    with queries.connect(db) as con:
+        result = queries.coverage_gaps(con, lat, lon, radius, coverage_m / 1000.0)
+    if html:
+        from . import maps as maps_mod
+        maps_mod.gaps_map((lat, lon), result, html)
+        err.print(f"[dim]wrote {html}[/dim]")
+    if as_json:
+        console.print_json(json.dumps(result, default=str))
+        return
+    console.print(f"[bold]{len(result['sites'])} uncovered licensed sites, "
+                  f"{len(result['towers'])} uncovered towers[/bold] "
+                  f"within {radius} km (coverage radius {coverage_m} m)")
+    _emit(result["sites"][:40], False,
+          ["dist_km", "call_sign", "entity_name", "radio_service_code",
+           "location_city", "location_state"],
+          title="uncovered licensed sites (nearest 40)")
+    _emit(result["towers"][:40], False,
+          ["dist_km", "registration_number", "owner_name", "structure_type",
+           "height_overall_m", "city", "state"],
+          title="uncovered towers (nearest 40)")
+
+
 @app.command("import")
 def import_capture(
     csv_file: Path = typer.Argument(..., help="WiGLE-format wardriving CSV."),
@@ -296,6 +347,8 @@ def debrief(
                                           "that flags an emitter as anomalous."),
     geojson: Optional[Path] = typer.Option(None, "--geojson",
                                            help="Write devices+flags to GeoJSON."),
+    html: Optional[Path] = typer.Option(None, "--html",
+                                        help="Write a self-contained Leaflet map."),
     db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt,
 ) -> None:
     """Drive debrief: enrich a capture against the licensing graph.
@@ -309,6 +362,10 @@ def debrief(
     if geojson:
         geojson.write_text(json.dumps(ingest_mod.to_geojson(result)))
         err.print(f"[dim]wrote {geojson}[/dim]")
+    if html:
+        from . import maps as maps_mod
+        maps_mod.debrief_map(result, html)
+        err.print(f"[dim]wrote {html}[/dim]")
     if as_json:
         console.print_json(json.dumps(result, default=str))
         return

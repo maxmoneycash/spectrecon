@@ -79,23 +79,41 @@ deltas are the alerting layer, not an upsert.
 ## The debrief pivot (wardriving captures)
 
 Wardriving rigs (WiGLE app, Kismet, Biscuit/Cerberus-class ESP32 devices)
-all log the same WiGLE CSV format. `import` + `debrief` join those captures
-to the licensing graph — the "who did I actually hear?" layer WiGLE
-itself doesn't have:
+all log the same formats. `import` + `debrief` join those captures to the
+licensing graph — the "who did I actually hear?" layer WiGLE itself
+doesn't have:
 
 ```sh
-uv run spectrecon import WIGLE005.CSV
+uv run spectrecon download oui        # one-time: IEEE vendor registry
+uv run spectrecon import WIGLE005.CSV # WiGLE CSV...
+uv run spectrecon import rig.kismet   # ...or Kismet SQLite logs
 uv run spectrecon debrief
-uv run spectrecon debrief --geojson drive.geojson   # drop into Earth/QGIS
+uv run spectrecon debrief --html drive.html      # Leaflet map to screenshot
+uv run spectrecon debrief --geojson drive.geojson # or Earth/QGIS
 ```
 
 For every unique BSSID (at its strongest-RSSI position):
 
 - nearest licensed sites (callsign, entity, service) and nearest ASR tower
+- **vendor**: OUI lookup (Espressif = ESP32 rigs, Ubiquiti, ...) plus
+  randomized-MAC detection — split fixed infrastructure from transient phones
 - **attribution**: SSID tokens matching a nearby licensee's entity name
   (`SkyTel Ops` heard 0.5 km from a SkyTel Spectrum LLC site -> attributed)
 - **anomalies**: emitters with no licensed infrastructure within
   `--anomaly-km` (default 2) — rogue/interesting by construction
+
+## The gaps pivot (pre-drive planner)
+
+Compares your imported captures against the licensing graph and lists what
+you have NOT sniffed yet:
+
+```sh
+uv run spectrecon gaps "34.0522,-118.2437" --radius-km 10 --html targets.html
+```
+
+Every licensed site and tower with no observation within `--coverage-m`
+(default 250 m) becomes a target — orange markers are licensed emitters,
+purple are ASR towers. Run it before the drive, debrief after.
 
 Data lives in `./data` by default; set `SPECTRECON_DATA_DIR` to relocate
 (e.g. an external drive — a full `--all` build stages several GB).

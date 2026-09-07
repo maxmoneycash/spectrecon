@@ -38,6 +38,33 @@ SERVICES: dict[str, tuple[str, str]] = {
 USER_AGENT = f"spectrecon/{__version__} (FCC ULS public access data tool)"
 CHUNK = 1 << 16
 
+# Non-FCC reference data (downloaded by the same command surface).
+EXTRA_DOWNLOADS: dict[str, tuple[str, str]] = {
+    "oui": ("IEEE MA-L OUI registry (BSSID vendor lookup)",
+            "https://standards-oui.ieee.org/oui/oui.csv"),
+}
+
+
+def download_extra(name: str, dest_dir: Path, force: bool = False) -> Path:
+    """Download a reference dataset (e.g. the IEEE OUI registry)."""
+    try:
+        desc, url = EXTRA_DOWNLOADS[name]
+    except KeyError:
+        raise DownloadError(f"Unknown extra {name!r}. Available: {', '.join(EXTRA_DOWNLOADS)}")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / url.rsplit("/", 1)[1]
+    if dest.exists() and not force:
+        logger.info("Already have %s (use --force to refresh)", dest.name)
+        return dest
+    logger.info("Downloading %s", desc)
+    with httpx.Client(timeout=120, follow_redirects=True) as client:
+        with client.stream("GET", url, headers={"User-Agent": USER_AGENT}) as resp:
+            resp.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in resp.iter_bytes(CHUNK):
+                    f.write(chunk)
+    return dest
+
 # Daily rolling deltas: https://data.fcc.gov/download/pub/uls/daily/l_{code}_{dow}.zip
 # Codes verified against HD.radio_service_code values in the delta files.
 DAILY_CODES: dict[str, str] = {
