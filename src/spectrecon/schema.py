@@ -87,6 +87,80 @@ ASR_TABLES: dict[str, tuple[str, ...]] = {
 GEO_TABLE = "LO"
 
 
+# IBFS (International Bureau Filing System: satellite + earth station + section
+# 214 records). Pipe-delimited like ULS but rows end with a "^|" terminator and
+# dates are Sybase-style ("Sep 30 1986 12:00:00:000AM"). Layouts from the FCC's
+# own CnvIbfs converter source (SUSS project) cross-checked with the 1998
+# ibfs.txt DDL (Wayback), verified against the 2026-07 IBFS.zip dump.
+IBFS_TABLES: dict[str, tuple[str, ...]] = {
+    # main: the filing spine. filing_key joins everything; address_key ->
+    # address (applicant/licensee), callsign -> space_sta.us_name for sats.
+    "main": ("filing_key", "filing_state", "callsign", "file_number",
+             "subsystem_code", "status_code", "status_date", "last_action",
+             "last_action_date", "mts_number", "date_filed", "mellon_date",
+             "date_grant", "date_deny", "date_dismiss", "date_surrender",
+             "date_begin", "date_expire", "date_last_update",
+             "aff_pub_notice_sw", "aff_pub_notice_date", "act_pub_notice_sw",
+             "act_pub_notice_date", "submission_id", "fee_control_number",
+             "app_type_code", "filing_other_text", "keyword1", "keyword2",
+             "tower_cleared_sw", "date_blocked", "blocked_reason_code",
+             "blocked_reason", "type_applicant_code", "applicant_other_text",
+             "class_of_station_code", "class_other_text", "signer_name",
+             "signer_title", "date_signed", "description", "address_key",
+             "address_attention", "address_phone_num", "address_fax_num",
+             "address_e_mail", "contact_key", "contact_attention",
+             "contact_relationship", "contact_phone_num", "contact_fax_num",
+             "contact_e_mail", "other_purpose_text", "streamlined_sw",
+             "date_transferred", "confidential", "date_queued",
+             "date_withdrew", "queue_flag", "filing_id", "date_created",
+             "initiator_id", "public_pn_note_key", "fee_exempt_sw",
+             "fee_exempt_reason", "remittance_id", "next_step", "released_by",
+             "date_released", "date_adopted", "order_da_number",),
+    # station: callsign-bearing records (incl. foreign broadcast stations)
+    "station": ("station_key", "filing_key", "station_callsign",
+                "station_broadcast_type", "station_frequency",
+                "station_channel", "station_city", "country_code",),
+    # site: transmitter locations with DMS coords; site_key -> anten
+    "site": ("site_key", "filing_key", "site_id", "site_description",
+             "contact_person", "site_street1", "site_street2", "site_city",
+             "site_county", "site_state", "site_zipcode", "site_telephone",
+             "site_elevation", "lat_degrees", "lat_minutes", "lat_seconds",
+             "lat_direction", "long_degrees", "long_minutes", "long_seconds",
+             "long_direction", "nad_ind", "num_vsats_built",
+             "vsat_report_date", "faa_coord_sw", "comply_25209a_sw",
+             "comply_25209a2_sw", "remote_control_sw",
+             "foreign_freq_coord_req_sw", "freq_coord_req_sw",
+             "area_of_operation_code", "faa_coord_not_req_sw",
+             "comply_25211_sw",),
+    # earth_sta: earth-station STA (temporary authority) detail per filing
+    "earth_sta": ("filing_key", "type_sta_code", "requested_date", "city",
+                  "state_code", "lat_degrees", "lat_minutes", "lat_seconds",
+                  "lat_direction", "long_degrees", "long_minutes",
+                  "long_seconds", "long_direction",),
+    # space_sta: the satellite registry (us_name = US callsign e.g. KS30)
+    "space_sta": ("space_station_key", "us_name", "itu_name", "orbit_location",
+                  "verbose", "inactive_date", "long_hemi",),
+    # anten: antenna detail; tower_id can be an ASR registration number
+    "anten": ("antenna_key", "antenna_id", "site_key", "diameter",
+              "diameter_minor", "diameter_major", "height_bldg_agl",
+              "height_max_agl", "height_max_amsl", "height_max_aroof",
+              "manufacturer", "max_input_power", "max_output_eirp", "model",
+              "quantity", "tower_id", "tower_cleared_sw",),
+    # freq: emission + zero-packed MHz range per antenna (anten.antenna_key)
+    "freq": ("frequency_key", "antenna_key", "polarization_code", "eirp",
+             "eirp_density", "emission", "frequency_lower", "frequency_upper",
+             "trans_mode", "modulation", "f11", "f12", "f13",),
+    # address: applicant/licensee entities; frn links back to ULS
+    "address": ("address_key", "address_id", "address_name", "dba_name",
+                "street1", "street2", "city", "state_code", "zipcode",
+                "country_code", "soundex", "dba_soundex", "frn", "f14",),
+    # stat_track: status history per filing
+    "stat_track": ("filing_key", "purpose", "status_date", "status_code",),
+    # filenum_xref: legacy file number -> filing key
+    "filenum_xref": ("legacy_file_number", "filing_key",),
+}
+
+
 def get_columns(record_type: str) -> tuple[str, ...] | None:
     """Column names for a record type code (e.g. 'HD'), or None if unknown."""
     return TABLES.get(record_type.upper())

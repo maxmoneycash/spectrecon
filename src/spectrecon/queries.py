@@ -32,6 +32,46 @@ def _haversine_expr(lat_expr: str, lon_expr: str, alias: str) -> str:
     )
 
 
+def _has_table(con: duckdb.DuckDBPyConnection, schema: str, name: str) -> bool:
+    return bool(
+        con.execute(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema = ? AND table_name = ?",
+            [schema, name],
+        ).fetchone()[0]
+    )
+
+
+def satellite(con: duckdb.DuckDBPyConnection, query: str):
+    """Satellite registry search by US callsign or ITU name."""
+    if not _has_table(con, "ibfs", "satellites"):
+        return []
+    return _rows(
+        con,
+        """
+        SELECT * FROM ibfs.satellites
+        WHERE upper(callsign) LIKE ? OR upper(name) LIKE ?
+        ORDER BY name
+        """,
+        [f"%{query.strip().upper()}%"] * 2,
+    )
+
+
+def ibfs_filings(con: duckdb.DuckDBPyConnection, query: str,
+                 exact_frn: bool = False):
+    """IBFS (satellite/earth-station/214) filings for an entity name or FRN."""
+    if not _has_table(con, "ibfs", "filings"):
+        return []
+    q = query.strip()
+    if exact_frn:
+        return _rows(con, "SELECT * FROM ibfs.filings WHERE frn = ?", [q])
+    return _rows(
+        con,
+        "SELECT * FROM ibfs.filings WHERE upper(entity_name) LIKE ?",
+        [f"%{q.upper()}%"],
+    )
+
+
 def lookup(con: duckdb.DuckDBPyConnection, callsign: str) -> dict:
     """Full picture for one callsign: license, entity, sites, frequencies."""
     cs = callsign.strip().upper()

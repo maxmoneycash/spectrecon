@@ -38,10 +38,12 @@ SERVICES: dict[str, tuple[str, str]] = {
 USER_AGENT = f"spectrecon/{__version__} (FCC ULS public access data tool)"
 CHUNK = 1 << 16
 
-# Non-FCC reference data (downloaded by the same command surface).
+# Non-FCC-ULS reference data (downloaded by the same command surface).
 EXTRA_DOWNLOADS: dict[str, tuple[str, str]] = {
     "oui": ("IEEE MA-L OUI registry (BSSID vendor lookup)",
             "https://standards-oui.ieee.org/oui/oui.csv"),
+    "ibfs": ("IBFS satellite/earth-station database (daily dump)",
+             "https://transition.fcc.gov/Bureaus/International/databases/IBFS.zip"),
 }
 
 

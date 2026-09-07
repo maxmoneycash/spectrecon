@@ -25,14 +25,16 @@ def normalize_zips(
     stage_dir: Path,
     tables: dict | None = None,
     name_prefix: str = "",
+    caret_terminated: bool = False,
 ) -> dict[str, int]:
     """Stream .dat members out of the zips into per-record-type staged files.
 
     FCC quirks handled here: latin-1-ish encoding, no header row, rows with
     missing or extra trailing fields, and blank/garbage lines. Returns a
     record-type -> row count map. `tables` overrides the record layout set
-    (ASR reuses ULS record codes with different layouts), and `name_prefix`
-    namespaces the staged files so the two never collide.
+    (ASR/IBFS reuse ULS-style codes with different layouts), `name_prefix`
+    namespaces the staged files so pipelines never collide, and
+    `caret_terminated` strips the IBFS "^|" row terminator.
     """
     stage_dir.mkdir(parents=True, exist_ok=True)
     writers: dict[str, "object"] = {}
@@ -41,7 +43,7 @@ def normalize_zips(
 
     def columns_for(rt: str):
         if tables is not None:
-            return tables.get(rt)
+            return tables.get(rt) or tables.get(rt.lower())
         return get_columns(rt)
 
     def writer_for(rt: str):
@@ -78,6 +80,8 @@ def normalize_zips(
                             if len(line) < 4:
                                 continue
                             fields = [f.strip() for f in line.split("|")]
+                            if caret_terminated and fields and fields[-1] == "^":
+                                fields = fields[:-1]
                             if len(fields) < 3:
                                 continue  # continuation/garbage line
                             if len(fields) > expected:
@@ -115,7 +119,10 @@ def load_duckdb(
         con.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
         for rt, n in sorted(counts.items()):
             stage_file = stage_dir / f"{name_prefix}{rt}.dat"
-            columns = tables.get(rt) if tables is not None else get_columns(rt)
+            if tables is not None:
+                columns = tables.get(rt) or tables.get(rt.lower())
+            else:
+                columns = get_columns(rt)
             assert columns is not None
             # every staged file has a trailing service provenance column
             col_struct = ", ".join(f"'{c}': 'VARCHAR'" for c in columns)
@@ -131,16 +138,23 @@ def load_duckdb(
             logger.info("Loaded %s.%-3s %9d rows", schema, rt, n)
 
         # All-VARCHAR loads keep ingestion bulletproof; cast on read in views.
-        for rt in counts:
-            if rt in INDEX_TABLES:
-                con.execute(
-                    f"CREATE INDEX IF NOT EXISTS idx_{schema}_{rt.lower()}_usi "
-                    f"ON {schema}.{rt} (unique_system_identifier)"
-                )
+        if tables is None:  # ULS layout: index the join key
+            for rt in counts:
+                if rt in INDEX_TABLES:
+                    con.execute(
+                        f"CREATE INDEX IF NOT EXISTS idx_{schema}_{rt.lower()}_usi "
+                        f"ON {schema}.{rt} (unique_system_identifier)"
+                    )
         if schema == "asr":
             _build_asr_views(con, counts)
             con.execute(
                 "CREATE OR REPLACE TABLE _build_info_asr AS SELECT now() AS built_at"
+            )
+            return
+        if schema == "ibfs":
+            _build_ibfs_views(con, counts)
+            con.execute(
+                "CREATE OR REPLACE TABLE _build_info_ibfs AS SELECT now() AS built_at"
             )
             return
         if "EN" in counts:
@@ -278,3 +292,119 @@ def _build_asr_views(con: "duckdb.DuckDBPyConnection", counts: dict[str, int]) -
         {en_join}
         """
     )
+
+
+def _build_ibfs_views(con: "duckdb.DuckDBPyConnection", counts: dict[str, int]) -> None:
+    """IBFS views: filings, earth-station sites, satellites, frequencies.
+
+    Join spine (from the FCC's CnvIbfs converter): main.filing_key ->
+    site.filing_key -> anten.site_key -> freq.antenna_key; applicant via
+    main.address_key -> address.address_key.
+    """
+    have = set(counts)
+    for rt, col in (("MAIN", "filing_key"), ("SITE", "filing_key"),
+                    ("SITE", "site_key"), ("ANTEN", "site_key"),
+                    ("FREQ", "antenna_key"), ("ADDRESS", "address_key"),
+                    ("SPACE_STA", "us_name")):
+        if rt in have:
+            con.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_ibfs_{rt.lower()}_{col} "
+                f"ON ibfs.{rt} ({col})"
+            )
+
+    if {"MAIN", "ADDRESS"} <= have:
+        # MAIN has duplicate filing_keys (filing versions) and ADDRESS repeats
+        # address_keys — both sides must be deduped or downstream joins explode.
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW ibfs.filings AS
+            WITH m AS (
+                SELECT * FROM ibfs.MAIN
+                QUALIFY row_number() OVER (
+                    PARTITION BY filing_key
+                    ORDER BY date_last_update DESC NULLS LAST) = 1
+            ), a AS (
+                SELECT address_key,
+                       any_value(address_name) AS address_name,
+                       any_value(dba_name) AS dba_name,
+                       any_value(frn) AS frn,
+                       any_value(city) AS city,
+                       any_value(state_code) AS state_code,
+                       any_value(country_code) AS country_code
+                FROM ibfs.ADDRESS GROUP BY address_key
+            )
+            SELECT m.filing_key, m.callsign, m.file_number, m.subsystem_code,
+                   m.status_code, m.status_date, m.date_filed, m.date_grant,
+                   m.date_expire, m.description,
+                   a.address_name AS entity_name, a.dba_name, a.frn,
+                   a.city, a.state_code AS state, a.country_code AS country
+            FROM m
+            LEFT JOIN a ON m.address_key = a.address_key
+            """
+        )
+
+    dms_lat = """(try_cast({t}.lat_degrees AS DOUBLE)
+        + try_cast({t}.lat_minutes AS DOUBLE) / 60
+        + try_cast({t}.lat_seconds AS DOUBLE) / 3600)
+        * CASE WHEN {t}.lat_direction = 'S' THEN -1 ELSE 1 END"""
+    dms_lon = """(try_cast({t}.long_degrees AS DOUBLE)
+        + try_cast({t}.long_minutes AS DOUBLE) / 60
+        + try_cast({t}.long_seconds AS DOUBLE) / 3600)
+        * CASE WHEN {t}.long_direction = 'W' THEN -1 ELSE 1 END"""
+
+    if {"SITE", "MAIN", "ADDRESS"} <= have:
+        con.execute(
+            f"""
+            CREATE OR REPLACE VIEW ibfs.sites AS
+            WITH s AS (
+                SELECT * FROM ibfs.SITE
+                QUALIFY row_number() OVER (PARTITION BY site_key) = 1
+            )
+            SELECT s.site_key, s.filing_key, f.callsign, f.file_number,
+                   f.entity_name, f.status_code, f.description,
+                   s.site_city AS city, s.site_county AS county,
+                   s.site_state AS state, s.site_zipcode AS zip_code,
+                   try_cast(s.site_elevation AS DOUBLE) AS elevation_m,
+                   {dms_lat.format(t='s')} AS lat,
+                   {dms_lon.format(t='s')} AS lon,
+                   s._service
+            FROM s
+            JOIN ibfs.filings f ON s.filing_key = f.filing_key
+            WHERE s.lat_degrees IS NOT NULL AND s.lat_degrees <> '0'
+              AND s.long_degrees IS NOT NULL AND s.long_degrees <> '0'
+            """
+        )
+
+    if "SPACE_STA" in have:
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW ibfs.satellites AS
+            SELECT DISTINCT us_name AS callsign, itu_name AS name,
+                   orbit_location,
+                   CASE WHEN try_cast(regexp_extract(inactive_date,
+                                      '([12][0-9]{3})') AS INTEGER) < 1950
+                        THEN NULL ELSE inactive_date END AS inactive_date
+            FROM ibfs.SPACE_STA
+            WHERE us_name IS NOT NULL
+            """
+        )
+
+    if {"FREQ", "ANTEN", "SITE", "MAIN", "ADDRESS"} <= have:
+        con.execute(
+            f"""
+            CREATE OR REPLACE VIEW ibfs.frequencies AS
+            SELECT f.callsign, f.entity_name, f.status_code,
+                   fr.emission, fr.polarization_code,
+                   try_cast(fr.frequency_lower AS DOUBLE) AS freq_low_mhz,
+                   try_cast(fr.frequency_upper AS DOUBLE) AS freq_high_mhz,
+                   try_cast(fr.eirp AS DOUBLE) AS eirp_dbw,
+                   an.manufacturer AS antenna_make, an.model AS antenna_model,
+                   try_cast(an.diameter AS DOUBLE) AS antenna_diameter_m,
+                   an.tower_id AS asr_tower_id,
+                   s.lat, s.lon, s.city, s.state
+            FROM ibfs.FREQ fr
+            JOIN ibfs.ANTEN an ON fr.antenna_key = an.antenna_key
+            JOIN ibfs.sites s ON an.site_key = s.site_key
+            JOIN ibfs.filings f ON s.filing_key = f.filing_key
+            """
+        )

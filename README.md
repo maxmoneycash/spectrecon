@@ -42,6 +42,11 @@ uv run spectrecon geo "34.0522,-118.2437" --radius-km 10
 uv run spectrecon towers "34.0522,-118.2437" --radius-km 5
 uv run spectrecon towers "28.5623,-80.5774" --radius-km 30 --owner "SPACEX"
 
+# pivot 2c: satellites (IBFS registry) and cross-system entity resolution
+uv run spectrecon download ibfs && uv run spectrecon build --only ibfs
+uv run spectrecon sat "STARLINK"
+uv run spectrecon entity "SPACEX"   # ULS licenses AND IBFS satellite filings
+
 # callsign -> license + entity + sites + frequencies
 uv run spectrecon lookup W1AW
 
@@ -121,15 +126,20 @@ Data lives in `./data` by default; set `SPECTRECON_DATA_DIR` to relocate
 ## The pivot graph
 
 - **entity -> footprint**: `EN` (entity/FRN) join `HD` (license header/status/service)
+- **entity -> satellites**: `entity` also searches `ibfs.filings` — satellite
+  market-access, earth-station, and section-214 applications keyed by FRN
 - **entity -> sites**: `LO` (locations, DMS coordinates -> decimal degrees in `uls.sites`)
 - **site -> RF detail**: `FR` (frequencies/power), `AN` (antennas/heights),
   `EM` (emission designators), `PA`/`SG` (microwave paths — who links to whom)
 - **point -> towers**: `asr.towers` — ASR registration (RA) joined to
   coordinates (CO) and owner (EN), 197k structures with heights
-- **callsign -> everything**: `uls.licenses` view (HD join EN)
+- **point -> earth stations**: `ibfs.sites` — 72k geocoded gateway/VSAT
+  locations; `ibfs.frequencies` chains site -> antenna -> emission/MHz range
+- **callsign -> everything**: `uls.licenses` view (HD join EN);
+  `ibfs.satellites` for the 833-entry satellite registry (`sat` command)
 
-Everything keys off `unique_system_identifier`; `EN.frn` is the cross-service
-entity resolver.
+Everything keys off `unique_system_identifier` in ULS; `EN.frn` /
+`address.frn` resolve entities across ULS and IBFS.
 
 ## Database layout
 
@@ -140,20 +150,30 @@ views do the heavy lifting:
 - `uls.licenses` — HD joined to EN with parsed dates
 - `uls.sites` — LO with decimal `lat`/`lon` columns
 - `asr.towers` — ASR registrations joined to coordinates and owners
+- `ibfs.filings` / `ibfs.sites` / `ibfs.satellites` / `ibfs.frequencies` —
+  the IBFS dump (MAIN/SITE/SPACE_STA/ADDRESS/FREQ/ANTEN), deduped and joined
 
 ASR tower files reuse ULS record codes with different layouts, so they load
 into their own `asr` schema from `ASR_TABLES` in `src/spectrecon/schema.py`
 (FCC publishes no per-position doc for these; layout is verified against the
 weekly file, with positional names where semantics are unconfirmed).
 
+IBFS is a separate database: caret-terminated rows, Sybase dates, its own
+table names (`IBFS_TABLES`). Layouts come from the FCC's CnvIbfs converter
+source (SUSS project, via Wayback) cross-checked with the 1998 ibfs.txt DDL.
+The ELS experimental search (apps.fcc.gov/oetcf/els) sits behind Akamai bot
+protection that rejects non-browser clients outright, so ELS is deferred
+until a browser-driven import is worth the fragility.
+
 Column layouts follow the FCC's official Public Access Database Definitions
 (v6.0.0). See `src/spectrecon/schema.py`.
 
 ## Roadmap
 
-- **ELS**: experimental licenses/STAs (no bulk file; ELS public search)
-- **IBFS/Part 25**: satellite earth stations and gateways
+- **ELS**: experimental licenses/STAs — blocked by Akamai bot protection on
+  apps.fcc.gov; needs browser-driven import (playwriter) or manual export
 - **ASR applications**: `a_tower.zip` (pending registrations, layouts unverified)
+- **IBFS watch**: the dump updates daily; diff `stat_track`/`main` across days
 - **international**: ISED (CA), Ofcom WTR (UK), ACMA RRL (AU)
 
 ## Data notes

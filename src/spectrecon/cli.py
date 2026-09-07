@@ -34,6 +34,8 @@ DB_PATH = DATA_DIR / "spectrecon.db"
 # ASR bulk files handled by the separate asr pipeline (see build command).
 # Only r_tower.zip (registrations) has verified layouts so far.
 TOWER_FILES = {"r_tower.zip"}
+# IBFS full-database dump (satellites, earth stations, section 214).
+IBFS_FILES = {"IBFS.zip"}
 
 JsonOpt = typer.Option(False, "--json", help="Machine-readable JSON output.")
 
@@ -96,22 +98,30 @@ def download(
 
 
 @app.command()
-def build(db: Path = typer.Option(DB_PATH, "--db")) -> None:
+def build(db: Path = typer.Option(DB_PATH, "--db"),
+          only: Optional[str] = typer.Option(None, "--only",
+                                             help="Build just one pipeline: "
+                                                  "uls, asr, or ibfs.")) -> None:
     """Normalize data/raw/*.zip and load them into DuckDB."""
     zips = sorted(RAW_DIR.glob("*.zip"))
     if not zips:
         err.print(f"[red]no zips in {RAW_DIR} - run `spectrecon download` first[/red]")
         raise typer.Exit(1)
-    # ASR tower files reuse ULS record codes with different layouts — they get
-    # their own staging namespace, layout set, and schema.
+    if only and only not in ("uls", "asr", "ibfs"):
+        raise typer.BadParameter("--only must be uls, asr, or ibfs")
+    # ASR tower files reuse ULS record codes with different layouts; IBFS is
+    # a separate database entirely (caret-terminated rows, own table names).
+    # Each gets its own staging namespace, layout set, and schema.
     tower_zips = [z for z in zips if z.name in TOWER_FILES]
-    uls_zips = [z for z in zips if z.name not in TOWER_FILES]
-    if uls_zips:
+    ibfs_zips = [z for z in zips if z.name in IBFS_FILES]
+    uls_zips = [z for z in zips
+                if z.name not in TOWER_FILES and z.name not in IBFS_FILES]
+    if uls_zips and only in (None, "uls"):
         counts = build_mod.normalize_zips(uls_zips, STAGE_DIR)
         for rt, n in sorted(counts.items()):
             console.print(f"staged {rt:3s} {n:>10,} rows")
         build_mod.load_duckdb(db, STAGE_DIR, counts)
-    if tower_zips:
+    if tower_zips and only in (None, "asr"):
         from .schema import ASR_TABLES
         asr_stage = DATA_DIR / "stage_asr"
         counts = build_mod.normalize_zips(tower_zips, asr_stage,
@@ -120,6 +130,17 @@ def build(db: Path = typer.Option(DB_PATH, "--db")) -> None:
             console.print(f"staged asr {rt:3s} {n:>10,} rows")
         build_mod.load_duckdb(db, asr_stage, counts, schema="asr",
                               tables=ASR_TABLES, name_prefix="asr_")
+    if ibfs_zips and only in (None, "ibfs"):
+        from .schema import IBFS_TABLES
+        ibfs_stage = DATA_DIR / "stage_ibfs"
+        counts = build_mod.normalize_zips(ibfs_zips, ibfs_stage,
+                                          tables=IBFS_TABLES,
+                                          name_prefix="ibfs_",
+                                          caret_terminated=True)
+        for rt, n in sorted(counts.items()):
+            console.print(f"staged ibfs {rt:12s} {n:>10,} rows")
+        build_mod.load_duckdb(db, ibfs_stage, counts, schema="ibfs",
+                              tables=IBFS_TABLES, name_prefix="ibfs_")
     console.print(f"[green]built {db}[/green]")
 
 
@@ -164,18 +185,40 @@ def lookup(callsign: str, db: Path = typer.Option(DB_PATH, "--db"),
 
 
 @app.command()
+def sat(query: str, db: Path = typer.Option(DB_PATH, "--db"),
+        as_json: bool = JsonOpt) -> None:
+    """Satellite registry search (IBFS): US callsign or ITU name."""
+    with queries.connect(db) as con:
+        rows = queries.satellite(con, query)
+    _emit(rows, as_json,
+          ["callsign", "name", "orbit_location", "inactive_date"],
+          title=f"satellites matching '{query}'")
+
+
+@app.command()
 def entity(query: str, frn: bool = typer.Option(False, "--frn", help="Exact FRN match."),
            db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt) -> None:
-    """Entity pivot: company name or FRN -> full license footprint."""
+    """Entity pivot: company name or FRN -> full license footprint.
+
+    Searches ULS licenses and, when the IBFS dump is loaded, satellite /
+    earth-station / section-214 filings too (FRN is the cross-system key).
+    """
     with queries.connect(db) as con:
         result = queries.entity(con, query, exact_frn=frn)
+        filings = queries.ibfs_filings(con, query, exact_frn=frn)
     if as_json:
+        result["ibfs_filings"] = filings
         console.print_json(json.dumps(result, default=str))
         return
     console.print_json(json.dumps(result["summary"], default=str))
     _emit(result["licenses"], False,
           ["call_sign", "license_status", "radio_service_code", "entity_name",
            "grant_date", "expired_date", "state"], title="licenses")
+    if filings:
+        _emit(filings, False,
+              ["callsign", "file_number", "subsystem_code", "status_code",
+               "entity_name", "date_filed", "date_grant", "country"],
+              title="ibfs filings (satellite / earth station / 214)")
 
 
 @app.command()
