@@ -35,6 +35,54 @@ TABLES: dict[str, tuple[str, ...]] = {
 }
 # fmt: on
 
+# ASR (Antenna Structure Registration, r_tower.zip) uses the same 2-char
+# record codes with DIFFERENT layouts — never mix with TABLES above.
+# Layouts derived from direct inspection of the 2026-09 weekly r_tower.zip
+# (FCC does not publish per-position docs for these; positional names are
+# used where semantics are unverified).
+ASR_TABLES: dict[str, tuple[str, ...]] = {
+    # RA: registration core. One row per registered structure.
+    "RA": ("record_type", "record_kind", "registration_number",
+           "unique_system_identifier", "file_number", "application_purpose",
+           "f7", "f8", "status_code",
+           "date_received", "date_granted", "date_constructed", "f13", "f14",
+           "last_action_date", "f16", "f17",
+           "contact_first_name", "contact_mi", "contact_last_name",
+           "contact_suffix", "contact_title", "f23",
+           "street_address", "city", "state", "county_fips", "zip_code",
+           "height_structure_m", "ground_elevation_m", "height_overall_m",
+           "height_agl_m", "structure_type",
+           "faa_study_date", "faa_study_number", "faa_circular",
+           "f37", "lighting_codes", "f39", "f40", "f41", "f42", "f43",
+           "f44", "f45", "f46", "f47", "f48", "f49",),
+    # CO: coordinates (DMS) per registration. coord_type 'T' = site point.
+    "CO": ("record_type", "record_kind", "registration_number",
+           "unique_system_identifier", "file_number", "coord_type",
+           "lat_degrees", "lat_minutes", "lat_seconds", "lat_direction",
+           "lat_packed_seconds",
+           "long_degrees", "long_minutes", "long_seconds", "long_direction",
+           "long_packed_seconds", "f17",),
+    # EN: structure owner (entity_type 'O').
+    "EN": ("record_type", "record_kind", "registration_number",
+           "unique_system_identifier", "file_number", "entity_type",
+           "f7", "f8", "f9", "entity_name", "f11", "f12", "f13", "f14",
+           "phone", "fax", "email", "street_address", "f19", "f20",
+           "city", "state", "zip_code", "attention_line", "f25",),
+    # HS: history log.
+    "HS": ("record_type", "record_kind", "registration_number",
+           "unique_system_identifier", "file_number", "log_date",
+           "description",),
+    # RE: remarks (free text, often termination/construction notes).
+    "RE": ("record_type", "record_kind", "registration_number",
+           "unique_system_identifier", "file_number", "source", "log_date",
+           "f8", "remark",),
+    # SC: special conditions (FAA lighting/marking approvals).
+    "SC": ("record_type", "record_kind", "registration_number",
+           "unique_system_identifier", "file_number", "log_date",
+           "condition_code", "condition",),
+}
+
+
 # Record types that carry a location with DMS coordinates (used for geo views).
 GEO_TABLE = "LO"
 

@@ -123,6 +123,41 @@ def geo(con: duckdb.DuckDBPyConnection, lat: float, lon: float, radius_km: float
     )
 
 
+def towers(
+    con: duckdb.DuckDBPyConnection,
+    lat: float,
+    lon: float,
+    radius_km: float,
+    owner: str | None = None,
+):
+    """Tower pivot: ASR-registered structures near a coordinate."""
+    dist = _haversine(lat, lon, alias="t")
+    dlat = radius_km / 111.0
+    dlon = radius_km / max(1.0, 111.0 * abs(math.cos(math.radians(lat))))
+    where = f"""
+        t.lat BETWEEN {lat - dlat} AND {lat + dlat}
+        AND t.lon BETWEEN {lon - dlon} AND {lon + dlon}
+        AND {dist} <= {radius_km}
+    """
+    params: list = []
+    if owner:
+        where += " AND upper(t.owner_name) LIKE ?"
+        params.append(f"%{owner.strip().upper()}%")
+    return _rows(
+        con,
+        f"""
+        SELECT {dist} AS dist_km, t.registration_number, t.owner_name,
+               t.structure_type, t.height_overall_m, t.height_structure_m,
+               t.ground_elevation_m, t.city, t.state, t.status_code,
+               t.application_purpose, t.date_constructed, t.lat, t.lon
+        FROM asr.towers t
+        WHERE {where}
+        ORDER BY dist_km
+        """,
+        params,
+    )
+
+
 def stats(con: duckdb.DuckDBPyConnection):
     tables = _rows(
         con,

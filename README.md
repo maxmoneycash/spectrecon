@@ -36,7 +36,11 @@ uv run spectrecon entity 0023616904 --frn
 uv run spectrecon entity "MOTOROLA" --json > moto.json
 
 # pivot 2: coordinate -> every licensed site nearby
-uv run spectrecon geo 34.0522 -118.2437 --radius-km 10
+uv run spectrecon geo "34.0522,-118.2437" --radius-km 10
+
+# pivot 2b: coordinate -> registered antenna structures (ASR towers)
+uv run spectrecon towers "34.0522,-118.2437" --radius-km 5
+uv run spectrecon towers "28.5623,-80.5774" --radius-km 30 --owner "SPACEX"
 
 # callsign -> license + entity + sites + frequencies
 uv run spectrecon lookup W1AW
@@ -59,6 +63,9 @@ uv run spectrecon watch
 uv run spectrecon watch --entity "SPACEX"
 uv run spectrecon watch --near "28.5623,-80.5774" --radius-km 50   # Cape Canaveral
 
+# also ingest application deltas — filings are intent, weeks before grants
+uv run spectrecon watch --apps --entity "SPACEX"
+
 # full stored feed, machine-readable
 uv run spectrecon watch --history --json
 ```
@@ -78,6 +85,8 @@ Data lives in `./data` by default; set `SPECTRECON_DATA_DIR` to relocate
 - **entity -> sites**: `LO` (locations, DMS coordinates -> decimal degrees in `uls.sites`)
 - **site -> RF detail**: `FR` (frequencies/power), `AN` (antennas/heights),
   `EM` (emission designators), `PA`/`SG` (microwave paths — who links to whom)
+- **point -> towers**: `asr.towers` — ASR registration (RA) joined to
+  coordinates (CO) and owner (EN), 197k structures with heights
 - **callsign -> everything**: `uls.licenses` view (HD join EN)
 
 Everything keys off `unique_system_identifier`; `EN.frn` is the cross-service
@@ -91,17 +100,21 @@ views do the heavy lifting:
 
 - `uls.licenses` — HD joined to EN with parsed dates
 - `uls.sites` — LO with decimal `lat`/`lon` columns
+- `asr.towers` — ASR registrations joined to coordinates and owners
+
+ASR tower files reuse ULS record codes with different layouts, so they load
+into their own `asr` schema from `ASR_TABLES` in `src/spectrecon/schema.py`
+(FCC publishes no per-position doc for these; layout is verified against the
+weekly file, with positional names where semantics are unconfirmed).
 
 Column layouts follow the FCC's official Public Access Database Definitions
 (v6.0.0). See `src/spectrecon/schema.py`.
 
 ## Roadmap
 
-- **daily applications**: deltas also exist for pending applications
-  (`a_{svc}_{dow}.zip`) — intent before grants; tracked separately from licenses
-- **ASR towers**: `r_tower.zip` (different record layouts — separate `asr` schema)
 - **ELS**: experimental licenses/STAs (no bulk file; ELS public search)
 - **IBFS/Part 25**: satellite earth stations and gateways
+- **ASR applications**: `a_tower.zip` (pending registrations, layouts unverified)
 - **international**: ISED (CA), Ofcom WTR (UK), ACMA RRL (AU)
 
 ## Data notes

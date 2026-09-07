@@ -12,7 +12,7 @@ from pathlib import Path
 
 import duckdb
 
-from .schema import get_columns
+from .schema import ASR_TABLES, get_columns
 
 logger = logging.getLogger(__name__)
 
@@ -20,21 +20,34 @@ logger = logging.getLogger(__name__)
 INDEX_TABLES = ("HD", "EN", "LO", "FR", "AN", "EM")
 
 
-def normalize_zips(zip_paths: list[Path], stage_dir: Path) -> dict[str, int]:
+def normalize_zips(
+    zip_paths: list[Path],
+    stage_dir: Path,
+    tables: dict | None = None,
+    name_prefix: str = "",
+) -> dict[str, int]:
     """Stream .dat members out of the zips into per-record-type staged files.
 
     FCC quirks handled here: latin-1-ish encoding, no header row, rows with
     missing or extra trailing fields, and blank/garbage lines. Returns a
-    record-type -> row count map.
+    record-type -> row count map. `tables` overrides the record layout set
+    (ASR reuses ULS record codes with different layouts), and `name_prefix`
+    namespaces the staged files so the two never collide.
     """
     stage_dir.mkdir(parents=True, exist_ok=True)
     writers: dict[str, "object"] = {}
     counts: dict[str, int] = {}
     skipped: dict[str, int] = {}
 
+    def columns_for(rt: str):
+        if tables is not None:
+            return tables.get(rt)
+        return get_columns(rt)
+
     def writer_for(rt: str):
         if rt not in writers:
-            writers[rt] = open(stage_dir / f"{rt}.dat", "w", encoding="utf-8", newline="\n")
+            writers[rt] = open(stage_dir / f"{name_prefix}{rt}.dat", "w",
+                               encoding="utf-8", newline="\n")
             counts[rt] = 0
         return writers[rt]
 
@@ -47,7 +60,7 @@ def normalize_zips(zip_paths: list[Path], stage_dir: Path) -> dict[str, int]:
                     if not name.lower().endswith(".dat"):
                         continue
                     rt = Path(name).stem.upper()
-                    columns = get_columns(rt)
+                    columns = columns_for(rt)
                     if columns is None:
                         skipped[rt] = skipped.get(rt, 0) + 1
                         continue
@@ -88,7 +101,12 @@ def normalize_zips(zip_paths: list[Path], stage_dir: Path) -> dict[str, int]:
 
 
 def load_duckdb(
-    db_path: Path, stage_dir: Path, counts: dict[str, int], schema: str = "uls"
+    db_path: Path,
+    stage_dir: Path,
+    counts: dict[str, int],
+    schema: str = "uls",
+    tables: dict | None = None,
+    name_prefix: str = "",
 ) -> None:
     """Bulk-load staged files into DuckDB and build derived views."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,8 +114,8 @@ def load_duckdb(
     try:
         con.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
         for rt, n in sorted(counts.items()):
-            stage_file = stage_dir / f"{rt}.dat"
-            columns = get_columns(rt)
+            stage_file = stage_dir / f"{name_prefix}{rt}.dat"
+            columns = tables.get(rt) if tables is not None else get_columns(rt)
             assert columns is not None
             # every staged file has a trailing service provenance column
             col_struct = ", ".join(f"'{c}': 'VARCHAR'" for c in columns)
@@ -119,6 +137,12 @@ def load_duckdb(
                     f"CREATE INDEX IF NOT EXISTS idx_{schema}_{rt.lower()}_usi "
                     f"ON {schema}.{rt} (unique_system_identifier)"
                 )
+        if schema == "asr":
+            _build_asr_views(con, counts)
+            con.execute(
+                "CREATE OR REPLACE TABLE _build_info_asr AS SELECT now() AS built_at"
+            )
+            return
         if "EN" in counts:
             con.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_{schema}_en_callsign "
@@ -189,3 +213,68 @@ def load_duckdb(
             )
     finally:
         con.close()
+
+
+def _build_asr_views(con: "duckdb.DuckDBPyConnection", counts: dict[str, int]) -> None:
+    """ASR-specific indexes and the asr.towers view (RA + CO coords + EN owner)."""
+    if "RA" not in counts:
+        return
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_asr_ra_reg ON asr.RA (registration_number)"
+    )
+    if "CO" in counts:
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asr_co_reg ON asr.CO (registration_number)"
+        )
+    if "EN" in counts:
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asr_en_reg ON asr.EN (registration_number)"
+        )
+    co_join = (
+        """LEFT JOIN (
+               SELECT * FROM asr.CO
+               QUALIFY row_number() OVER (
+                   PARTITION BY registration_number
+                   ORDER BY (coord_type = 'T') DESC) = 1
+           ) c USING (registration_number)"""
+        if "CO" in counts
+        else "LEFT JOIN (SELECT NULL AS registration_number, NULL AS coord_type, "
+        "NULL AS lat_degrees, NULL AS lat_minutes, NULL AS lat_seconds, "
+        "NULL AS lat_direction, NULL AS long_degrees, NULL AS long_minutes, "
+        "NULL AS long_seconds, NULL AS long_direction WHERE 1=0) c "
+        "USING (registration_number)"
+    )
+    en_join = (
+        "LEFT JOIN (SELECT * FROM asr.EN WHERE entity_type = 'O') e "
+        "USING (registration_number)"
+        if "EN" in counts
+        else "LEFT JOIN (SELECT NULL AS registration_number, NULL AS entity_name, "
+        "NULL AS phone, NULL AS email WHERE 1=0) e USING (registration_number)"
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE VIEW asr.towers AS
+        SELECT
+            r.registration_number, r.unique_system_identifier, r.file_number,
+            r.application_purpose, r.status_code, r.structure_type,
+            r.date_received, r.date_granted, r.date_constructed, r.last_action_date,
+            try_cast(r.height_structure_m AS DOUBLE) AS height_structure_m,
+            try_cast(r.ground_elevation_m AS DOUBLE) AS ground_elevation_m,
+            try_cast(r.height_overall_m AS DOUBLE) AS height_overall_m,
+            r.street_address, r.city, r.state, r.county_fips, r.zip_code,
+            (try_cast(c.lat_degrees AS DOUBLE)
+                + try_cast(c.lat_minutes AS DOUBLE) / 60
+                + try_cast(c.lat_seconds AS DOUBLE) / 3600)
+                * CASE WHEN c.lat_direction = 'S' THEN -1 ELSE 1 END AS lat,
+            (try_cast(c.long_degrees AS DOUBLE)
+                + try_cast(c.long_minutes AS DOUBLE) / 60
+                + try_cast(c.long_seconds AS DOUBLE) / 3600)
+                * CASE WHEN c.long_direction = 'W' THEN -1 ELSE 1 END AS lon,
+            e.entity_name AS owner_name, e.phone AS owner_phone,
+            e.email AS owner_email,
+            r._service
+        FROM asr.RA r
+        {co_join}
+        {en_join}
+        """
+    )

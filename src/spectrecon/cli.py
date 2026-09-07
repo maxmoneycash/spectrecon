@@ -30,6 +30,10 @@ STAGE_DIR = DATA_DIR / "stage"
 DAILY_DIR = DATA_DIR / "daily"
 DB_PATH = DATA_DIR / "spectrecon.db"
 
+# ASR bulk files handled by the separate asr pipeline (see build command).
+# Only r_tower.zip (registrations) has verified layouts so far.
+TOWER_FILES = {"r_tower.zip"}
+
 JsonOpt = typer.Option(False, "--json", help="Machine-readable JSON output.")
 
 
@@ -89,11 +93,45 @@ def build(db: Path = typer.Option(DB_PATH, "--db")) -> None:
     if not zips:
         err.print(f"[red]no zips in {RAW_DIR} - run `spectrecon download` first[/red]")
         raise typer.Exit(1)
-    counts = build_mod.normalize_zips(zips, STAGE_DIR)
-    for rt, n in sorted(counts.items()):
-        console.print(f"staged {rt:3s} {n:>10,} rows")
-    build_mod.load_duckdb(db, STAGE_DIR, counts)
+    # ASR tower files reuse ULS record codes with different layouts — they get
+    # their own staging namespace, layout set, and schema.
+    tower_zips = [z for z in zips if z.name in TOWER_FILES]
+    uls_zips = [z for z in zips if z.name not in TOWER_FILES]
+    if uls_zips:
+        counts = build_mod.normalize_zips(uls_zips, STAGE_DIR)
+        for rt, n in sorted(counts.items()):
+            console.print(f"staged {rt:3s} {n:>10,} rows")
+        build_mod.load_duckdb(db, STAGE_DIR, counts)
+    if tower_zips:
+        from .schema import ASR_TABLES
+        asr_stage = DATA_DIR / "stage_asr"
+        counts = build_mod.normalize_zips(tower_zips, asr_stage,
+                                          tables=ASR_TABLES, name_prefix="asr_")
+        for rt, n in sorted(counts.items()):
+            console.print(f"staged asr {rt:3s} {n:>10,} rows")
+        build_mod.load_duckdb(db, asr_stage, counts, schema="asr",
+                              tables=ASR_TABLES, name_prefix="asr_")
     console.print(f"[green]built {db}[/green]")
+
+
+@app.command()
+def towers(coords: str = typer.Argument(..., help="Center point as 'lat,lon'."),
+           radius: float = typer.Option(25.0, "--radius-km"),
+           owner: Optional[str] = typer.Option(None, "--owner",
+                                               help="Filter by owner name."),
+           db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt) -> None:
+    """Tower pivot: registered antenna structures near a coordinate (ASR)."""
+    try:
+        lat_s, lon_s = coords.replace(" ", "").split(",")
+        lat, lon = float(lat_s), float(lon_s)
+    except ValueError:
+        raise typer.BadParameter("coords must be 'lat,lon', e.g. 34.0522,-118.2437")
+    with queries.connect(db) as con:
+        rows = queries.towers(con, lat, lon, radius, owner=owner)
+    _emit(rows, as_json,
+          ["dist_km", "registration_number", "owner_name", "structure_type",
+           "height_overall_m", "city", "state", "status_code", "lat", "lon"],
+          title=f"towers within {radius} km of {lat},{lon}")
 
 
 @app.command()
@@ -159,6 +197,8 @@ def watch(
     near: Optional[str] = typer.Option(None, "--near",
                                        help="Geofence center as 'lat,lon'."),
     radius: float = typer.Option(25.0, "--radius-km"),
+    apps: bool = typer.Option(False, "--apps",
+                              help="Also ingest application deltas (intent before grants)."),
     history: bool = typer.Option(False, "--history",
                                  help="Show the full stored feed, not just new events."),
     db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt,
@@ -168,22 +208,33 @@ def watch(
     Downloads the rolling week of per-day license delta files (a few KB each),
     records new/changed licenses into the watch_events table, and prints what
     is new since the last run. Re-running is idempotent; schedule it with cron.
+    With --apps, also ingests application deltas as 'application' events.
     """
     targets = [s.lower() for s in service] if service else sorted(dl.DAILY_CODES)
     zips: list[Path] = []
+    app_zips: list[Path] = []
     for s in targets:
         try:
             zips.extend(dl.download_daily(s, DAILY_DIR))
-        except (dl.DownloadError, Exception) as e:  # keep other services on failure
+            if apps:
+                app_zips.extend(dl.download_daily(s, DAILY_DIR, prefix="a"))
+        except Exception as e:  # keep other services on failure
             err.print(f"[yellow]{s}: {e}[/yellow]")
-    if not zips:
+    if not zips and not app_zips:
         err.print("[red]no daily deltas downloaded[/red]")
         raise typer.Exit(1)
 
-    stage = DATA_DIR / "daily_stage"
-    counts = watch_mod.ingest_daily(db, zips, stage)
-    err.print(f"[dim]daily schema: {sum(counts.values()):,} records across "
-              f"{len(counts)} tables from {len(zips)} delta files[/dim]")
+    schemas = []
+    if zips:
+        counts = watch_mod.ingest_daily(db, zips, DATA_DIR / "daily_stage", schema="daily")
+        schemas.append("daily")
+        err.print(f"[dim]daily schema: {sum(counts.values()):,} records across "
+                  f"{len(counts)} tables from {len(zips)} delta files[/dim]")
+    if app_zips:
+        counts = watch_mod.ingest_daily(db, app_zips, DATA_DIR / "apps_stage", schema="apps")
+        schemas.append("apps")
+        err.print(f"[dim]apps schema: {sum(counts.values()):,} records across "
+                  f"{len(counts)} tables from {len(app_zips)} delta files[/dim]")
 
     con = duckdb.connect(str(db))
     try:
@@ -196,7 +247,7 @@ def watch(
         if events_exists:
             since = con.execute("SELECT max(first_seen) FROM watch_events").fetchone()[0]
 
-        new_count = watch_mod.record_events(con)
+        new_count = watch_mod.record_events(con, tuple(schemas))
 
         near_pt = None
         if near:

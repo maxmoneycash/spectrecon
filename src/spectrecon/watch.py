@@ -42,58 +42,71 @@ CREATE TABLE IF NOT EXISTS watch_events(
 """
 
 
-def ingest_daily(db_path: Path, zip_paths: list[Path], stage_dir: Path) -> dict[str, int]:
-    """Normalize daily delta zips and load them into the `daily` schema."""
+def ingest_daily(
+    db_path: Path, zip_paths: list[Path], stage_dir: Path, schema: str = "daily"
+) -> dict[str, int]:
+    """Normalize daily delta zips and load them into the given schema."""
     counts = normalize_zips(zip_paths, stage_dir)
-    load_duckdb(db_path, stage_dir, counts, schema="daily")
+    load_duckdb(db_path, stage_dir, counts, schema=schema)
     return counts
 
 
-def record_events(con: duckdb.DuckDBPyConnection) -> int:
+# schema -> event kind prefix ("daily" = license deltas, "apps" = applications)
+SCHEMA_KINDS = {"daily": "license", "apps": "application"}
+
+
+def record_events(
+    con: duckdb.DuckDBPyConnection, schemas: tuple[str, ...] = ("daily",)
+) -> int:
     """Persist unseen delta records into watch_events. Returns new-event count."""
     con.execute(EVENTS_DDL)
+    # normalize legacy 'site' kind from before application-delta support
+    con.execute("UPDATE watch_events SET kind = 'license-site' WHERE kind = 'site'")
     prev_max = con.execute("SELECT max(first_seen) FROM watch_events").fetchone()[0]
 
-    def has_view(name: str) -> bool:
+    def has_view(schema: str, name: str) -> bool:
         return bool(
             con.execute(
                 "SELECT count(*) FROM information_schema.tables "
-                "WHERE table_schema = 'daily' AND table_name = ?",
-                [name],
+                "WHERE table_schema = ? AND table_name = ?",
+                [schema, name],
             ).fetchone()[0]
         )
 
-    if has_view("licenses"):
-        # license-level events (one per changed license per delta file)
-        con.execute(
-            """
-            INSERT OR IGNORE INTO watch_events
-                (delta_file, kind, usi, location_number, call_sign, entity_name, frn,
-                 radio_service_code, license_status, grant_date, last_action_date,
-                 lat, lon, city, state)
-            SELECT _service, 'license', unique_system_identifier, '', call_sign,
-                   entity_name, frn, radio_service_code, license_status,
-                   grant_date::VARCHAR, last_action_date::VARCHAR,
-                   NULL, NULL, city, state
-            FROM daily.licenses
-            """
-        )
-    if has_view("licenses") and has_view("sites"):
-        # site-level events (one per location of a changed license, with coords)
-        con.execute(
-            """
-            INSERT OR IGNORE INTO watch_events
-                (delta_file, kind, usi, location_number, call_sign, entity_name, frn,
-                 radio_service_code, license_status, grant_date, last_action_date,
-                 lat, lon, city, state)
-            SELECT s._service, 'site', s.unique_system_identifier, s.location_number,
-                   s.call_sign, l.entity_name, l.frn, l.radio_service_code,
-                   l.license_status, l.grant_date::VARCHAR, l.last_action_date::VARCHAR,
-                   s.lat, s.lon, s.location_city, s.location_state
-            FROM daily.sites s
-            JOIN daily.licenses l USING (unique_system_identifier)
-            """
-        )
+    for schema in schemas:
+        kind = SCHEMA_KINDS.get(schema, schema)
+        if has_view(schema, "licenses"):
+            # license/application-level events (one per changed record per file)
+            con.execute(
+                f"""
+                INSERT OR IGNORE INTO watch_events
+                    (delta_file, kind, usi, location_number, call_sign, entity_name, frn,
+                     radio_service_code, license_status, grant_date, last_action_date,
+                     lat, lon, city, state)
+                SELECT _service, '{kind}', unique_system_identifier, '', call_sign,
+                       entity_name, frn, radio_service_code, license_status,
+                       grant_date::VARCHAR, last_action_date::VARCHAR,
+                       NULL, NULL, city, state
+                FROM {schema}.licenses
+                """
+            )
+        if has_view(schema, "licenses") and has_view(schema, "sites"):
+            # site-level events (one per location of a changed record, with coords)
+            con.execute(
+                f"""
+                INSERT OR IGNORE INTO watch_events
+                    (delta_file, kind, usi, location_number, call_sign, entity_name, frn,
+                     radio_service_code, license_status, grant_date, last_action_date,
+                     lat, lon, city, state)
+                SELECT s._service, '{kind}-site', s.unique_system_identifier,
+                       s.location_number, s.call_sign, l.entity_name, l.frn,
+                       l.radio_service_code, l.license_status,
+                       l.grant_date::VARCHAR, l.last_action_date::VARCHAR,
+                       s.lat, s.lon, s.location_city, s.location_state
+                FROM {schema}.sites s
+                JOIN {schema}.licenses l USING (unique_system_identifier)
+                """
+            )
 
     if prev_max is None:
         return con.execute("SELECT count(*) FROM watch_events").fetchone()[0]

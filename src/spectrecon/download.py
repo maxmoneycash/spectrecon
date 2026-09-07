@@ -32,6 +32,7 @@ SERVICES: dict[str, tuple[str, str]] = {
     "land_mobile_broadcast": ("Land Mobile Broadcast Auxiliary", "l_LMbcast.zip"),
     "fixed_radio": ("Commercial Operators / Restricted Radiotelephone", "l_frc.zip"),
     "mds_itfs": ("BRS/EBS (formerly MDS/ITFS)", "l_mdsitfs.zip"),
+    "towers": ("Antenna Structure Registration (ASR)", "r_tower.zip"),
 }
 
 USER_AGENT = f"spectrecon/{__version__} (FCC ULS public access data tool)"
@@ -58,11 +59,13 @@ DAILY_BASE_URL = "https://data.fcc.gov/download/pub/uls/daily"
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
-def download_daily(service: str, dest_dir: Path) -> list[Path]:
-    """Download the rolling week of daily license deltas for a service.
+def download_daily(service: str, dest_dir: Path, prefix: str = "l") -> list[Path]:
+    """Download the rolling week of daily deltas for a service.
 
-    Files are tiny (KBs to a few hundred KB) and each weekday's file is
-    overwritten weekly, so fetching all seven gives a rolling week of changes.
+    prefix "l" = granted-license deltas, "a" = application deltas (intent
+    before grants). Files are tiny (KBs to a few hundred KB) and each
+    weekday's file is overwritten weekly, so fetching all seven gives a
+    rolling week of changes.
     """
     try:
         code = DAILY_CODES[service]
@@ -72,7 +75,7 @@ def download_daily(service: str, dest_dir: Path) -> list[Path]:
     out = []
     with httpx.Client(timeout=60, follow_redirects=True) as client:
         for dow in WEEKDAYS:
-            filename = f"l_{code}_{dow}.zip"
+            filename = f"{prefix}_{code}_{dow}.zip"
             url = f"{DAILY_BASE_URL}/{filename}"
             dest = dest_dir / filename
             try:
