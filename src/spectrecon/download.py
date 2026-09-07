@@ -33,6 +33,7 @@ SERVICES: dict[str, tuple[str, str]] = {
     "fixed_radio": ("Commercial Operators / Restricted Radiotelephone", "l_frc.zip"),
     "mds_itfs": ("BRS/EBS (formerly MDS/ITFS)", "l_mdsitfs.zip"),
     "towers": ("Antenna Structure Registration (ASR)", "r_tower.zip"),
+    "tower_apps": ("ASR pending applications", "a_tower.zip"),
 }
 
 USER_AGENT = f"spectrecon/{__version__} (FCC ULS public access data tool)"

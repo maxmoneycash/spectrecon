@@ -145,10 +145,12 @@ def load_duckdb(
                         f"CREATE INDEX IF NOT EXISTS idx_{schema}_{rt.lower()}_usi "
                         f"ON {schema}.{rt} (unique_system_identifier)"
                     )
-        if schema == "asr":
-            _build_asr_views(con, counts)
+        if schema in ("asr", "asrapp"):
+            view = "towers" if schema == "asr" else "applications"
+            _build_asr_views(con, counts, schema=schema, view=view)
             con.execute(
-                "CREATE OR REPLACE TABLE _build_info_asr AS SELECT now() AS built_at"
+                f"CREATE OR REPLACE TABLE _build_info_{schema} "
+                "AS SELECT now() AS built_at"
             )
             return
         if schema == "ibfs":
@@ -229,24 +231,32 @@ def load_duckdb(
         con.close()
 
 
-def _build_asr_views(con: "duckdb.DuckDBPyConnection", counts: dict[str, int]) -> None:
-    """ASR-specific indexes and the asr.towers view (RA + CO coords + EN owner)."""
+def _build_asr_views(con: "duckdb.DuckDBPyConnection", counts: dict[str, int],
+                     schema: str = "asr", view: str = "towers") -> None:
+    """ASR indexes and structure view (RA + CO coords + EN owner).
+
+    Used for both asr.towers (registrations, r_tower.zip) and
+    asrapp.applications (pending apps, a_tower.zip — same layouts).
+    """
     if "RA" not in counts:
         return
     con.execute(
-        "CREATE INDEX IF NOT EXISTS idx_asr_ra_reg ON asr.RA (registration_number)"
+        f"CREATE INDEX IF NOT EXISTS idx_{schema}_ra_reg "
+        f"ON {schema}.RA (registration_number)"
     )
     if "CO" in counts:
         con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_asr_co_reg ON asr.CO (registration_number)"
+            f"CREATE INDEX IF NOT EXISTS idx_{schema}_co_reg "
+            f"ON {schema}.CO (registration_number)"
         )
     if "EN" in counts:
         con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_asr_en_reg ON asr.EN (registration_number)"
+            f"CREATE INDEX IF NOT EXISTS idx_{schema}_en_reg "
+            f"ON {schema}.EN (registration_number)"
         )
     co_join = (
-        """LEFT JOIN (
-               SELECT * FROM asr.CO
+        f"""LEFT JOIN (
+               SELECT * FROM {schema}.CO
                QUALIFY row_number() OVER (
                    PARTITION BY registration_number
                    ORDER BY (coord_type = 'T') DESC) = 1
@@ -259,7 +269,7 @@ def _build_asr_views(con: "duckdb.DuckDBPyConnection", counts: dict[str, int]) -
         "USING (registration_number)"
     )
     en_join = (
-        "LEFT JOIN (SELECT * FROM asr.EN WHERE entity_type = 'O') e "
+        f"LEFT JOIN (SELECT * FROM {schema}.EN WHERE entity_type = 'O') e "
         "USING (registration_number)"
         if "EN" in counts
         else "LEFT JOIN (SELECT NULL AS registration_number, NULL AS entity_name, "
@@ -267,7 +277,7 @@ def _build_asr_views(con: "duckdb.DuckDBPyConnection", counts: dict[str, int]) -
     )
     con.execute(
         f"""
-        CREATE OR REPLACE VIEW asr.towers AS
+        CREATE OR REPLACE VIEW {schema}.{view} AS
         SELECT
             r.registration_number, r.unique_system_identifier, r.file_number,
             r.application_purpose, r.status_code, r.structure_type,
@@ -287,7 +297,7 @@ def _build_asr_views(con: "duckdb.DuckDBPyConnection", counts: dict[str, int]) -
             e.entity_name AS owner_name, e.phone AS owner_phone,
             e.email AS owner_email,
             r._service
-        FROM asr.RA r
+        FROM {schema}.RA r
         {co_join}
         {en_join}
         """

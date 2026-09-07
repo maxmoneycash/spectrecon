@@ -174,8 +174,10 @@ def towers(
     lon: float,
     radius_km: float,
     owner: str | None = None,
+    view: str = "asr.towers",
 ):
-    """Tower pivot: ASR-registered structures near a coordinate."""
+    """Tower pivot: ASR-registered structures (or pending applications) near
+    a coordinate."""
     dist = _haversine(lat, lon, alias="t")
     dlat = radius_km / 111.0
     dlon = radius_km / max(1.0, 111.0 * abs(math.cos(math.radians(lat))))
@@ -195,7 +197,7 @@ def towers(
                t.structure_type, t.height_overall_m, t.height_structure_m,
                t.ground_elevation_m, t.city, t.state, t.status_code,
                t.application_purpose, t.date_constructed, t.lat, t.lon
-        FROM asr.towers t
+        FROM {view} t
         WHERE {where}
         ORDER BY dist_km
         """,

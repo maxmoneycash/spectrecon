@@ -41,6 +41,7 @@ uv run spectrecon geo "34.0522,-118.2437" --radius-km 10
 # pivot 2b: coordinate -> registered antenna structures (ASR towers)
 uv run spectrecon towers "34.0522,-118.2437" --radius-km 5
 uv run spectrecon towers "28.5623,-80.5774" --radius-km 30 --owner "SPACEX"
+uv run spectrecon towers "34.0522,-118.2437" --radius-km 5 --applications
 
 # pivot 2c: satellites (IBFS registry) and cross-system entity resolution
 uv run spectrecon download ibfs && uv run spectrecon build --only ibfs
@@ -172,8 +173,9 @@ Column layouts follow the FCC's official Public Access Database Definitions
 
 - **ELS**: experimental licenses/STAs — blocked by Akamai bot protection on
   apps.fcc.gov; needs browser-driven import (playwriter) or manual export
-- **ASR applications**: `a_tower.zip` (pending registrations, layouts unverified)
-- **IBFS watch**: the dump updates daily; diff `stat_track`/`main` across days
+- **IBFS watch**: the dump is labeled daily-updated, but the public mirror
+  (transition.fcc.gov) has been stale since 2026-07-16; a working daily
+  source (or fcc.report's mirror) would enable diff-based alerting
 - **international**: ISED (CA), Ofcom WTR (UK), ACMA RRL (AU)
 
 ## Data notes

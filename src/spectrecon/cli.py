@@ -32,8 +32,9 @@ DAILY_DIR = DATA_DIR / "daily"
 DB_PATH = DATA_DIR / "spectrecon.db"
 
 # ASR bulk files handled by the separate asr pipeline (see build command).
-# Only r_tower.zip (registrations) has verified layouts so far.
 TOWER_FILES = {"r_tower.zip"}
+# Pending ASR applications — same layouts, separate asrapp schema.
+TOWER_APP_FILES = {"a_tower.zip"}
 # IBFS full-database dump (satellites, earth stations, section 214).
 IBFS_FILES = {"IBFS.zip"}
 
@@ -107,15 +108,16 @@ def build(db: Path = typer.Option(DB_PATH, "--db"),
     if not zips:
         err.print(f"[red]no zips in {RAW_DIR} - run `spectrecon download` first[/red]")
         raise typer.Exit(1)
-    if only and only not in ("uls", "asr", "ibfs"):
-        raise typer.BadParameter("--only must be uls, asr, or ibfs")
+    if only and only not in ("uls", "asr", "asrapp", "ibfs"):
+        raise typer.BadParameter("--only must be uls, asr, asrapp, or ibfs")
     # ASR tower files reuse ULS record codes with different layouts; IBFS is
     # a separate database entirely (caret-terminated rows, own table names).
     # Each gets its own staging namespace, layout set, and schema.
     tower_zips = [z for z in zips if z.name in TOWER_FILES]
+    tower_app_zips = [z for z in zips if z.name in TOWER_APP_FILES]
     ibfs_zips = [z for z in zips if z.name in IBFS_FILES]
-    uls_zips = [z for z in zips
-                if z.name not in TOWER_FILES and z.name not in IBFS_FILES]
+    uls_zips = [z for z in zips if z.name not in TOWER_FILES
+                and z.name not in TOWER_APP_FILES and z.name not in IBFS_FILES]
     if uls_zips and only in (None, "uls"):
         counts = build_mod.normalize_zips(uls_zips, STAGE_DIR)
         for rt, n in sorted(counts.items()):
@@ -130,6 +132,16 @@ def build(db: Path = typer.Option(DB_PATH, "--db"),
             console.print(f"staged asr {rt:3s} {n:>10,} rows")
         build_mod.load_duckdb(db, asr_stage, counts, schema="asr",
                               tables=ASR_TABLES, name_prefix="asr_")
+    if tower_app_zips and only in (None, "asrapp"):
+        from .schema import ASR_TABLES
+        app_stage = DATA_DIR / "stage_asrapp"
+        counts = build_mod.normalize_zips(tower_app_zips, app_stage,
+                                          tables=ASR_TABLES,
+                                          name_prefix="asrapp_")
+        for rt, n in sorted(counts.items()):
+            console.print(f"staged asrapp {rt:3s} {n:>10,} rows")
+        build_mod.load_duckdb(db, app_stage, counts, schema="asrapp",
+                              tables=ASR_TABLES, name_prefix="asrapp_")
     if ibfs_zips and only in (None, "ibfs"):
         from .schema import IBFS_TABLES
         ibfs_stage = DATA_DIR / "stage_ibfs"
@@ -149,6 +161,9 @@ def towers(coords: str = typer.Argument(..., help="Center point as 'lat,lon'."),
            radius: float = typer.Option(25.0, "--radius-km"),
            owner: Optional[str] = typer.Option(None, "--owner",
                                                help="Filter by owner name."),
+           applications: bool = typer.Option(False, "--applications",
+                                             help="Search pending applications "
+                                                  "instead of registrations."),
            db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt) -> None:
     """Tower pivot: registered antenna structures near a coordinate (ASR)."""
     try:
@@ -156,12 +171,14 @@ def towers(coords: str = typer.Argument(..., help="Center point as 'lat,lon'."),
         lat, lon = float(lat_s), float(lon_s)
     except ValueError:
         raise typer.BadParameter("coords must be 'lat,lon', e.g. 34.0522,-118.2437")
+    view = "asrapp.applications" if applications else "asr.towers"
     with queries.connect(db) as con:
-        rows = queries.towers(con, lat, lon, radius, owner=owner)
+        rows = queries.towers(con, lat, lon, radius, owner=owner, view=view)
+    what = "tower applications" if applications else "towers"
     _emit(rows, as_json,
           ["dist_km", "registration_number", "owner_name", "structure_type",
            "height_overall_m", "city", "state", "status_code", "lat", "lon"],
-          title=f"towers within {radius} km of {lat},{lon}")
+          title=f"{what} within {radius} km of {lat},{lon}")
 
 
 @app.command()
