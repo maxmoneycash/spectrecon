@@ -76,6 +76,27 @@ show up same-day — put `spectrecon watch --entity ...` on a cron and you have
 an RF change-detection alarm. The weekly snapshot stays the source of truth;
 deltas are the alerting layer, not an upsert.
 
+## The debrief pivot (wardriving captures)
+
+Wardriving rigs (WiGLE app, Kismet, Biscuit/Cerberus-class ESP32 devices)
+all log the same WiGLE CSV format. `import` + `debrief` join those captures
+to the licensing graph — the "who did I actually hear?" layer WiGLE
+itself doesn't have:
+
+```sh
+uv run spectrecon import WIGLE005.CSV
+uv run spectrecon debrief
+uv run spectrecon debrief --geojson drive.geojson   # drop into Earth/QGIS
+```
+
+For every unique BSSID (at its strongest-RSSI position):
+
+- nearest licensed sites (callsign, entity, service) and nearest ASR tower
+- **attribution**: SSID tokens matching a nearby licensee's entity name
+  (`SkyTel Ops` heard 0.5 km from a SkyTel Spectrum LLC site -> attributed)
+- **anomalies**: emitters with no licensed infrastructure within
+  `--anomaly-km` (default 2) — rogue/interesting by construction
+
 Data lives in `./data` by default; set `SPECTRECON_DATA_DIR` to relocate
 (e.g. an external drive — a full `--all` build stages several GB).
 

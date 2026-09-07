@@ -13,6 +13,7 @@ from rich.table import Table
 
 from . import build as build_mod
 from . import download as dl
+from . import ingest as ingest_mod
 from . import queries
 from . import watch as watch_mod
 
@@ -268,6 +269,62 @@ def watch(
           ["delta_file", "kind", "call_sign", "entity_name", "radio_service_code",
            "license_status", "grant_date", "city", "state", "lat", "lon"],
           title="watch feed")
+
+
+@app.command("import")
+def import_capture(
+    csv_file: Path = typer.Argument(..., help="WiGLE-format wardriving CSV."),
+    db: Path = typer.Option(DB_PATH, "--db"),
+) -> None:
+    """Import a wardriving capture (WiGLE CSV) into the capture schema."""
+    if not csv_file.exists():
+        err.print(f"[red]{csv_file} not found[/red]")
+        raise typer.Exit(1)
+    n = ingest_mod.import_capture(db, csv_file)
+    if n == 0:
+        err.print("[yellow]no observations parsed - is this a WiGLE-format CSV?[/yellow]")
+        raise typer.Exit(1)
+    console.print(f"[green]{n} observations imported from {csv_file.name}[/green]")
+
+
+@app.command()
+def debrief(
+    capture_file: Optional[str] = typer.Option(None, "--file",
+                                               help="Limit to one imported capture."),
+    anomaly_km: float = typer.Option(2.0, "--anomaly-km",
+                                     help="Distance from licensed infrastructure "
+                                          "that flags an emitter as anomalous."),
+    geojson: Optional[Path] = typer.Option(None, "--geojson",
+                                           help="Write devices+flags to GeoJSON."),
+    db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt,
+) -> None:
+    """Drive debrief: enrich a capture against the licensing graph.
+
+    Every unique BSSID gets nearest licensed sites/towers; SSIDs matching a
+    nearby licensee's entity name are attributed; emitters with no licensed
+    infrastructure within --anomaly-km are flagged as anomalous.
+    """
+    result = ingest_mod.debrief(db, capture_file=capture_file,
+                                anomaly_km=anomaly_km)
+    if geojson:
+        geojson.write_text(json.dumps(ingest_mod.to_geojson(result)))
+        err.print(f"[dim]wrote {geojson}[/dim]")
+    if as_json:
+        console.print_json(json.dumps(result, default=str))
+        return
+    s = result["summary"]
+    console.print(f"[bold]{s['unique_devices']} devices[/bold] "
+                  f"({s['observations']} observations, "
+                  f"{s['unique_ssids']} SSIDs) "
+                  f"{s['first_obs']} -> {s['last_obs']}")
+    console.print_json(json.dumps(s["devices_by_type"]))
+    if result["attributions"]:
+        _emit(result["attributions"], False,
+              ["ssid", "entity_name", "call_sign", "radio_service_code", "dist_km"],
+              title="attributed (SSID matches nearby licensee)")
+    _emit(result["anomalies"], False,
+          ["bssid", "ssid", "rssi", "obs_type", "sightings", "lat", "lon"],
+          title=f"anomalies (no licensed infrastructure within {anomaly_km} km)")
 
 
 @app.command()
