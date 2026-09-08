@@ -382,6 +382,15 @@ def gaps(
           title="uncovered towers (nearest 40)")
 
 
+@app.command("mcp")
+def mcp_server(db: Path = typer.Option(DB_PATH, "--db")) -> None:
+    """Run the MCP server (stdio) exposing every pivot as agent tools."""
+    os.environ["SPECTRECON_DB"] = str(db)
+    from . import mcp_server as srv
+    srv.DB_PATH = db
+    srv.main()
+
+
 @app.command("import")
 def import_capture(
     csv_file: Path = typer.Argument(..., help="WiGLE-format wardriving CSV."),
