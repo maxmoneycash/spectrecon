@@ -404,6 +404,28 @@ def mcp_server(db: Path = typer.Option(DB_PATH, "--db")) -> None:
     srv.main()
 
 
+@app.command("els-import")
+def els_import(
+    json_file: Path = typer.Argument(...,
+                                     help="JSON dump from scripts/els_export.py."),
+    query: str = typer.Option("", "--query",
+                              help="The ELS search that produced the file."),
+    db: Path = typer.Option(DB_PATH, "--db"),
+) -> None:
+    """Import FCC ELS experimental-license search results (browser export).
+
+    ELS has no bulk file and blocks non-browser clients; capture results with
+    scripts/els_export.py (drives your Arc browser), then load them here.
+    Re-importing the same query refreshes statuses by file number.
+    """
+    from . import els as els_mod
+    if not json_file.exists():
+        err.print(f"[red]{json_file} not found[/red]")
+        raise typer.Exit(1)
+    n = els_mod.load_els_json(db, json_file, query)
+    console.print(f"[green]{n} ELS applications upserted[/green]")
+
+
 @app.command("import")
 def import_capture(
     csv_file: Path = typer.Argument(..., help="WiGLE-format wardriving CSV."),

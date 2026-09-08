@@ -213,15 +213,32 @@ until a browser-driven import is worth the fragility.
 Column layouts follow the FCC's official Public Access Database Definitions
 (v6.0.0). See `src/spectrecon/schema.py`.
 
+## ELS (experimental licenses) — browser-captured
+
+ELS has no bulk file and apps.fcc.gov sits behind Akamai bot protection that
+rejects non-browser clients. The capture path drives your real browser:
+
+```sh
+# needs: Arc + the Playwriter extension (arc-browser / playwriter installed)
+python scripts/els_export.py "Space Exploration" /tmp/els_spacex.json
+uv run spectrecon els-import /tmp/els_spacex.json --query "Space Exploration"
+uv run spectrecon sql "select * from els.applications where status='Pending'"
+```
+
+Results land in `els.applications`, upserted by file number — re-run the
+same query later and status changes (pending -> granted/denied) update in
+place, which is the ELS watch story. The results page caps at 100 rows per
+query; narrow with the form's city/state/date fields for full coverage.
+
 ## Roadmap
 
-- **ELS**: experimental licenses/STAs — blocked by Akamai bot protection on
-  apps.fcc.gov; needs browser-driven import (playwriter) or manual export
 - **IBFS watch**: the dump is labeled daily-updated, but the public mirror
   (transition.fcc.gov) has been stale since 2026-07-16; a working daily
   source (or fcc.report's mirror) would enable diff-based alerting
 - **intl pivots**: ISED/Ofcom/ACMA are loaded but not yet wired into the
   entity/geo commands (query the schemas directly via `sql` for now)
+- **ELS pagination**: results cap at 100 rows/query; scripted narrowing
+  (state × experiment-type sweeps) would give full-registry coverage
 
 ## Data notes
 
