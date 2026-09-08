@@ -115,9 +115,14 @@ def download(
 @app.command()
 def build(db: Path = typer.Option(DB_PATH, "--db"),
           only: Optional[str] = typer.Option(None, "--only",
-                                             help="Build just one pipeline: "
-                                                  "uls, asr, or ibfs.")) -> None:
+                                             help="Build just one pipeline: uls, "
+                                                  "asr, asrapp, ibfs, ised, ofcom, "
+                                                  "acma.")) -> None:
     """Normalize data/raw/*.zip and load them into DuckDB."""
+    if only is None:
+        _build_all(db)
+        console.print(f"[green]built {db}[/green]")
+        return
     zips = sorted(RAW_DIR.glob("*.zip")) + sorted(RAW_DIR.glob("*.csv"))
     if not zips:
         err.print(f"[red]no zips in {RAW_DIR} - run `spectrecon download` first[/red]")
@@ -421,6 +426,106 @@ def gaps(
           ["dist_km", "registration_number", "owner_name", "structure_type",
            "height_overall_m", "city", "state"],
           title="uncovered towers (nearest 40)")
+
+
+@app.command()
+def refresh(db: Path = typer.Option(DB_PATH, "--db"),
+            rebuild: bool = typer.Option(True, "--rebuild/--no-rebuild"),
+            watch: bool = typer.Option(True, "--watch/--no-watch")) -> None:
+    """One-shot updater for cron: refresh snapshots, rebuild, ingest deltas.
+
+    Downloads weekly/monthly/nightly sources (freshness-checked), rebuilds
+    any pipeline whose files are present, then ingests the rolling week of
+    daily license + application deltas into the watch feed.
+    """
+    # weekly/monthly downloads (skip-if-current is built into the downloaders)
+    for s in sorted(dl.SERVICES):
+        try:
+            dl.download_service(s, RAW_DIR)
+        except Exception as e:
+            err.print(f"[yellow]{s}: {e}[/yellow]")
+    for s in sorted(dl.EXTRA_DOWNLOADS):
+        try:
+            dl.download_extra(s, RAW_DIR)
+        except Exception as e:
+            err.print(f"[yellow]{s}: {e}[/yellow]")
+    if rebuild:
+        _build_all(db)
+    if watch:
+        _watch_ingest(db)
+    console.print("[green]refresh complete[/green]")
+
+
+def _build_all(db: Path) -> None:
+    """Rebuild every pipeline whose source files are present in data/raw."""
+    zips = sorted(RAW_DIR.glob("*.zip")) + sorted(RAW_DIR.glob("*.csv"))
+    if not zips:
+        err.print(f"[red]no zips in {RAW_DIR} - run `spectrecon download` first[/red]")
+        raise typer.Exit(1)
+    tower_zips = [z for z in zips if z.name in TOWER_FILES]
+    tower_app_zips = [z for z in zips if z.name in TOWER_APP_FILES]
+    ibfs_zips = [z for z in zips if z.name in IBFS_FILES]
+    intl = {"ised": [z for z in zips if z.name == "TAFL_LTAF.zip"],
+            "ofcom": [z for z in zips if z.name == "WTR.csv"],
+            "acma": [z for z in zips if z.name == "spectra_rrl.zip"]}
+    uls_zips = [z for z in zips if z.name not in TOWER_FILES
+                and z.name not in TOWER_APP_FILES and z.name not in IBFS_FILES
+                and all(z not in v for v in intl.values())]
+    from .schema import ASR_TABLES, IBFS_TABLES
+    from . import intl as intl_mod
+    if uls_zips:
+        counts = build_mod.normalize_zips(uls_zips, STAGE_DIR)
+        build_mod.load_duckdb(db, STAGE_DIR, counts)
+    if tower_zips:
+        st = DATA_DIR / "stage_asr"
+        counts = build_mod.normalize_zips(tower_zips, st, tables=ASR_TABLES,
+                                          name_prefix="asr_")
+        build_mod.load_duckdb(db, st, counts, schema="asr",
+                              tables=ASR_TABLES, name_prefix="asr_")
+    if tower_app_zips:
+        st = DATA_DIR / "stage_asrapp"
+        counts = build_mod.normalize_zips(tower_app_zips, st, tables=ASR_TABLES,
+                                          name_prefix="asrapp_")
+        build_mod.load_duckdb(db, st, counts, schema="asrapp",
+                              tables=ASR_TABLES, name_prefix="asrapp_")
+    if ibfs_zips:
+        st = DATA_DIR / "stage_ibfs"
+        counts = build_mod.normalize_zips(ibfs_zips, st, tables=IBFS_TABLES,
+                                          name_prefix="ibfs_",
+                                          caret_terminated=True)
+        build_mod.load_duckdb(db, st, counts, schema="ibfs",
+                              tables=IBFS_TABLES, name_prefix="ibfs_")
+    loaders = {"ised": intl_mod.load_ised, "ofcom": intl_mod.load_ofcom,
+               "acma": intl_mod.load_acma}
+    for name, files in intl.items():
+        if files:
+            loaders[name](db, files[0])
+
+
+def _watch_ingest(db: Path) -> None:
+    """Ingest the rolling week of daily license + application deltas."""
+    zips: list[Path] = []
+    app_zips: list[Path] = []
+    for s in sorted(dl.DAILY_CODES):
+        try:
+            zips.extend(dl.download_daily(s, DAILY_DIR))
+            app_zips.extend(dl.download_daily(s, DAILY_DIR, prefix="a"))
+        except Exception as e:
+            err.print(f"[yellow]daily {s}: {e}[/yellow]")
+    schemas = []
+    if zips:
+        watch_mod.ingest_daily(db, zips, DATA_DIR / "daily_stage", schema="daily")
+        schemas.append("daily")
+    if app_zips:
+        watch_mod.ingest_daily(db, app_zips, DATA_DIR / "apps_stage", schema="apps")
+        schemas.append("apps")
+    if schemas:
+        con = duckdb.connect(str(db))
+        try:
+            n = watch_mod.record_events(con, tuple(schemas))
+            console.print(f"[dim]watch feed: {n} new events[/dim]")
+        finally:
+            con.close()
 
 
 @app.command("mcp")

@@ -14,6 +14,10 @@ locally in DuckDB.
 ## Install
 
 ```sh
+# from GitHub, as a tool
+uv tool install git+https://github.com/maxmoneycash/spectrecon
+
+# or from a clone, for development
 uv sync
 ```
 
@@ -112,6 +116,15 @@ per changed site, with coordinates), deduplicated across runs. New grants
 show up same-day — put `spectrecon watch --entity ...` on a cron and you have
 an RF change-detection alarm. The weekly snapshot stays the source of truth;
 deltas are the alerting layer, not an upsert.
+
+For cron, one command does everything — freshness-checked downloads, rebuild
+of every loaded pipeline, and the daily delta ingest (licenses + apps):
+
+```sh
+# weekly, e.g. Monday 07:12:  12 7 * * 1  cd /path/spectrecon && uv run spectrecon refresh
+uv run spectrecon refresh                  # full: download + rebuild + watch
+uv run spectrecon refresh --no-rebuild     # quick: just deltas + freshness checks
+```
 
 ## The debrief pivot (wardriving captures)
 
