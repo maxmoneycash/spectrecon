@@ -45,6 +45,12 @@ EXTRA_DOWNLOADS: dict[str, tuple[str, str]] = {
             "https://standards-oui.ieee.org/oui/oui.csv"),
     "ibfs": ("IBFS satellite/earth-station database (daily dump)",
              "https://transition.fcc.gov/Bureaus/International/databases/IBFS.zip"),
+    "ised": ("ISED Canada SMS authorization extract (monthly)",
+             "https://www.ic.gc.ca/engineering/SMS_TAFL_Files/TAFL_LTAF.zip"),
+    "ofcom": ("Ofcom UK Wireless Telegraphy Register (nightly)",
+              "https://static.ofcom.org.uk/static/radiolicensing/html/register/WTR.csv"),
+    "acma": ("ACMA Australia Register of Radiocommunications Licences (daily)",
+             "https://web.acma.gov.au/rrl-updates/spectra_rrl.zip"),
 }
 
 

@@ -104,20 +104,26 @@ def build(db: Path = typer.Option(DB_PATH, "--db"),
                                              help="Build just one pipeline: "
                                                   "uls, asr, or ibfs.")) -> None:
     """Normalize data/raw/*.zip and load them into DuckDB."""
-    zips = sorted(RAW_DIR.glob("*.zip"))
+    zips = sorted(RAW_DIR.glob("*.zip")) + sorted(RAW_DIR.glob("*.csv"))
     if not zips:
         err.print(f"[red]no zips in {RAW_DIR} - run `spectrecon download` first[/red]")
         raise typer.Exit(1)
-    if only and only not in ("uls", "asr", "asrapp", "ibfs"):
-        raise typer.BadParameter("--only must be uls, asr, asrapp, or ibfs")
+    if only and only not in ("uls", "asr", "asrapp", "ibfs",
+                             "ised", "ofcom", "acma"):
+        raise typer.BadParameter("--only must be uls, asr, asrapp, ibfs, "
+                                 "ised, ofcom, or acma")
     # ASR tower files reuse ULS record codes with different layouts; IBFS is
-    # a separate database entirely (caret-terminated rows, own table names).
-    # Each gets its own staging namespace, layout set, and schema.
+    # a separate database entirely (caret-terminated rows, own table names);
+    # international registries are plain CSVs. Each gets its own pipeline.
     tower_zips = [z for z in zips if z.name in TOWER_FILES]
     tower_app_zips = [z for z in zips if z.name in TOWER_APP_FILES]
     ibfs_zips = [z for z in zips if z.name in IBFS_FILES]
+    intl = {"ised": [z for z in zips if z.name == "TAFL_LTAF.zip"],
+            "ofcom": [z for z in zips if z.name == "WTR.csv"],
+            "acma": [z for z in zips if z.name == "spectra_rrl.zip"]}
     uls_zips = [z for z in zips if z.name not in TOWER_FILES
-                and z.name not in TOWER_APP_FILES and z.name not in IBFS_FILES]
+                and z.name not in TOWER_APP_FILES and z.name not in IBFS_FILES
+                and all(z not in v for v in intl.values())]
     if uls_zips and only in (None, "uls"):
         counts = build_mod.normalize_zips(uls_zips, STAGE_DIR)
         for rt, n in sorted(counts.items()):
@@ -153,6 +159,13 @@ def build(db: Path = typer.Option(DB_PATH, "--db"),
             console.print(f"staged ibfs {rt:12s} {n:>10,} rows")
         build_mod.load_duckdb(db, ibfs_stage, counts, schema="ibfs",
                               tables=IBFS_TABLES, name_prefix="ibfs_")
+    from . import intl as intl_mod
+    loaders = {"ised": intl_mod.load_ised, "ofcom": intl_mod.load_ofcom,
+               "acma": intl_mod.load_acma}
+    for name, files in intl.items():
+        if files and only in (None, name):
+            n = loaders[name](db, files[0])
+            console.print(f"loaded {name}: {n}")
     console.print(f"[green]built {db}[/green]")
 
 

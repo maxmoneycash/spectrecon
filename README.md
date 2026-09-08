@@ -147,6 +147,24 @@ Every licensed site and tower with no observation within `--coverage-m`
 (default 250 m) becomes a target — orange markers are licensed emitters,
 purple are ASR towers. Run it before the drive, debrief after.
 
+## International registries
+
+```sh
+uv run spectrecon download ised ofcom acma
+uv run spectrecon build --only ised    # or: ofcom, acma
+```
+
+- **ISED (Canada)** — SMS authorization extract (monthly): 900k assignments
+  with licensee, callsign, frequency, ERP, and decimal WGS84 coordinates in
+  `ised.assignments`. Open Government Licence – Canada.
+- **Ofcom (UK)** — Wireless Telegraphy Register (nightly): 206k licences in
+  `ofcom.licences`. Open Government Licence (UK).
+- **ACMA (Australia)** — RRL daily relational dump: `acma.licence`,
+  `acma.sites` (130k geocoded), `acma.client`, `acma.device_details` (2.2M
+  frequency rows). **Custom licence**: prohibits redistributing
+  natural-person licensee personal info and any spam use — local query only.
+  See `LICENCE.TXT` inside the zip.
+
 Data lives in `./data` by default; set `SPECTRECON_DATA_DIR` to relocate
 (e.g. an external drive — a full `--all` build stages several GB).
 
@@ -202,7 +220,8 @@ Column layouts follow the FCC's official Public Access Database Definitions
 - **IBFS watch**: the dump is labeled daily-updated, but the public mirror
   (transition.fcc.gov) has been stale since 2026-07-16; a working daily
   source (or fcc.report's mirror) would enable diff-based alerting
-- **international**: ISED (CA), Ofcom WTR (UK), ACMA RRL (AU)
+- **intl pivots**: ISED/Ofcom/ACMA are loaded but not yet wired into the
+  entity/geo commands (query the schemas directly via `sql` for now)
 
 ## Data notes
 
