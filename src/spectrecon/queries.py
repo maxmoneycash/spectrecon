@@ -290,7 +290,7 @@ def survey(con: duckdb.DuckDBPyConnection, lat: float, lon: float,
 
     One row per emitter/structure with a `source` column:
     uls (licensed sites), asr (towers), asrapp (pending towers), ibfs
-    (earth stations), ised, ofcom, acma.
+    (earth stations), ised, ofcom, acma, mesh (mesh-network nodes).
     """
     dlat = radius_km / 111.0
     dlon = radius_km / max(1.0, 111.0 * abs(math.cos(math.radians(lat))))
@@ -364,6 +364,16 @@ def survey(con: duckdb.DuckDBPyConnection, lat: float, lon: float,
                    NULL AS detail, s."NAME" AS city, s."STATE" AS region,
                    NULL AS height_m, s.lat_num AS lat, s.lon_num AS lon
             FROM acma.sites s WHERE {box}"""):
+            out.append(r)
+    if _has_table(con, "mesh", "nodes"):
+        dist, box = in_box("n")
+        for r in _rows(con, f"""
+            SELECT 'mesh' AS source, {dist} AS dist_km, n.node_id AS ident,
+                   n.name AS owner,
+                   n.source || ' ' || coalesce(n.node_type, 'node') AS detail,
+                   NULL AS city, NULL AS region, NULL AS height_m,
+                   n.lat, n.lon
+            FROM mesh.nodes n WHERE {box}"""):
             out.append(r)
     out.sort(key=lambda r: r["dist_km"])
     return out

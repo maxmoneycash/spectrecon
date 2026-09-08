@@ -102,8 +102,32 @@ def watch_feed(entity: str | None = None, frn: str | None = None,
 @mcp.tool()
 def survey(lat: float, lon: float, radius_km: float = 5.0) -> str:
     """Everything RF near a point across every loaded registry (ULS, ASR,
-    IBFS, ISED, Ofcom, ACMA) — one list with a source column."""
+    IBFS, ISED, Ofcom, ACMA, mesh) — one list with a source column."""
     return _run(queries.survey, lat, lon, radius_km)
+
+
+@mcp.tool()
+def mesh_near(lat: float, lon: float, radius_km: float = 25.0,
+              source: str | None = None) -> str:
+    """Geofenced mesh nodes near a coordinate, sorted by distance.
+    Optionally filter to one source (meshtastic, meshcore, ttn_gateway,
+    aredn, reticulum)."""
+    from . import mesh as mesh_mod
+    return _run(mesh_mod.near, lat, lon, radius_km, source=source)
+
+
+@mcp.tool()
+def mesh_search(query: str) -> str:
+    """Name/node-id substring search across every mesh source."""
+    from . import mesh as mesh_mod
+    return _run(mesh_mod.search, query)
+
+
+@mcp.tool()
+def mesh_stats() -> str:
+    """Per-source mesh node counts and latest fetch time."""
+    from . import mesh as mesh_mod
+    return _run(mesh_mod.stats)
 
 
 @mcp.tool()
@@ -111,7 +135,7 @@ def sql(query: str) -> str:
     """Ad-hoc read-only SQL against the database (SELECT only).
     Schemas: uls (licenses), asr (towers), asrapp (tower applications),
     ibfs (satellites/earth stations), capture (wardriving imports),
-    ref (OUI vendors), main (watch_events)."""
+    ref (OUI vendors), main (watch_events), mesh (mesh-network nodes)."""
     if not query.strip().lower().startswith("select"):
         return json.dumps({"error": "SELECT only"})
     with queries.connect(DB_PATH) as con:

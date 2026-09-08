@@ -83,6 +83,15 @@ uv run spectrecon entity "BOEING"   # ...plus ISED (Canada) and ACMA (Australia)
 uv run spectrecon survey "43.6532,-79.3832" --radius-km 2   # Toronto
 uv run spectrecon survey --at "-33.8688,151.2093"           # southern lat: use --at
 
+# mesh networks: live node maps from five keyless JSON APIs
+uv run spectrecon mesh update                               # all five sources
+uv run spectrecon mesh update meshtastic aredn              # or just some
+uv run spectrecon mesh stats
+uv run spectrecon mesh near "34.0522,-118.2437" --radius-km 25
+uv run spectrecon mesh near --at "-33.8688,151.2093" --source reticulum
+uv run spectrecon mesh search "W1AW"
+uv run spectrecon mesh map --html mesh.html --at "34.0522,-118.2437" --radius-km 50
+
 # callsign -> license + entity + sites + frequencies
 uv run spectrecon lookup W1AW
 
@@ -122,8 +131,9 @@ of every loaded pipeline, and the daily delta ingest (licenses + apps):
 
 ```sh
 # weekly, e.g. Monday 07:12:  12 7 * * 1  cd /path/spectrecon && uv run spectrecon refresh
-uv run spectrecon refresh                  # full: download + rebuild + watch
+uv run spectrecon refresh                  # full: download + rebuild + watch + mesh
 uv run spectrecon refresh --no-rebuild     # quick: just deltas + freshness checks
+uv run spectrecon refresh --no-mesh        # skip live mesh-map fetches
 ```
 
 ## The debrief pivot (wardriving captures)
@@ -185,6 +195,30 @@ uv run spectrecon build --only ised    # or: ofcom, acma
 
 Data lives in `./data` by default; set `SPECTRECON_DATA_DIR` to relocate
 (e.g. an external drive — a full `--all` build stages several GB).
+
+## Mesh networks
+
+`mesh update` aggregates five public mesh/LoRaWAN node maps into a common
+`mesh.nodes` table (source, node_id, name, type, radio, position, first/last
+seen, plus a JSON `detail` column for source-specific extras like radio
+params, online status, and MQTT topics). All sources are anonymous and
+keyless; unlike the FCC pipelines these are live JSON APIs fetched directly —
+nothing is staged in `data/raw`. Per-source failures warn and skip, so one
+dead map never blocks the rest.
+
+| source | what | cadence |
+|---|---|---|
+| `meshtastic` | meshmap.net node map (MQTT-reported positions) | live |
+| `meshcore` | map.meshcore.io nodes (clients, repeaters, room servers) | live |
+| `ttn_gateway` | TTN/LoRaWAN gateways seen by Packet Broker's mapper | live |
+| `aredn` | worldmap.arednmesh.org — **amateur radio** mesh (ham callsigns, link topology) | live |
+| `reticulum` | rmap.world Reticulum network map | live |
+
+Caveats: **Reticulum's rmap.world serves a broken TLS certificate chain**, so
+its fetch disables verification (read-only public data; a warning is logged).
+**AREDN publishes JavaScript, not JSON** (`const out = {...};`) — the loader
+strips the wrapper. Mesh nodes also join the `survey` sweep (source `mesh`)
+once loaded.
 
 ## The pivot graph
 

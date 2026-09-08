@@ -431,12 +431,14 @@ def gaps(
 @app.command()
 def refresh(db: Path = typer.Option(DB_PATH, "--db"),
             rebuild: bool = typer.Option(True, "--rebuild/--no-rebuild"),
-            watch: bool = typer.Option(True, "--watch/--no-watch")) -> None:
+            watch: bool = typer.Option(True, "--watch/--no-watch"),
+            mesh: bool = typer.Option(True, "--mesh/--no-mesh")) -> None:
     """One-shot updater for cron: refresh snapshots, rebuild, ingest deltas.
 
     Downloads weekly/monthly/nightly sources (freshness-checked), rebuilds
     any pipeline whose files are present, then ingests the rolling week of
-    daily license + application deltas into the watch feed.
+    daily license + application deltas into the watch feed, then fetches
+    live mesh-network maps (warn-and-skip per source).
     """
     # weekly/monthly downloads (skip-if-current is built into the downloaders)
     for s in sorted(dl.SERVICES):
@@ -453,6 +455,8 @@ def refresh(db: Path = typer.Option(DB_PATH, "--db"),
         _build_all(db)
     if watch:
         _watch_ingest(db)
+    if mesh:
+        _mesh_fetch(db)
     console.print("[green]refresh complete[/green]")
 
 
@@ -526,6 +530,113 @@ def _watch_ingest(db: Path) -> None:
             console.print(f"[dim]watch feed: {n} new events[/dim]")
         finally:
             con.close()
+
+
+mesh_app = typer.Typer(
+    name="mesh",
+    help="Public mesh-network maps: Meshtastic, MeshCore, TTN, AREDN, Reticulum.",
+    no_args_is_help=True,
+)
+app.add_typer(mesh_app, name="mesh")
+
+
+def _mesh_fetch(db: Path, sources: Optional[list[str]] = None) -> int:
+    """Fetch mesh sources; warn-and-skip per source. Returns successes."""
+    from . import mesh as mesh_mod
+    targets = [s.lower() for s in sources] if sources else sorted(mesh_mod.SOURCES)
+    ok = 0
+    for s in targets:
+        try:
+            n = mesh_mod.update_source(db, s)
+            console.print(f"[green]{s}[/green]: {n:,} nodes")
+            ok += 1
+        except Exception as e:  # keep other sources on failure
+            err.print(f"[yellow]{s}: {e}[/yellow]")
+    return ok
+
+
+@mesh_app.command("update")
+def mesh_update(
+    sources: Optional[list[str]] = typer.Argument(
+        None, help="Sources to fetch (default: all five)."),
+    db: Path = typer.Option(DB_PATH, "--db"),
+) -> None:
+    """Fetch live mesh-network maps and load them into mesh.nodes.
+
+    Per-source failures warn and skip, so one dead map never blocks the rest.
+    """
+    if not _mesh_fetch(db, sources):
+        err.print("[red]no mesh sources loaded[/red]")
+        raise typer.Exit(1)
+
+
+@mesh_app.command("stats")
+def mesh_stats(db: Path = typer.Option(DB_PATH, "--db"),
+               as_json: bool = JsonOpt) -> None:
+    """Per-source node counts and latest fetch time."""
+    from . import mesh as mesh_mod
+    with queries.connect(db) as con:
+        _emit(mesh_mod.stats(con), as_json, title="mesh.nodes")
+
+
+@mesh_app.command("near")
+def mesh_near(coords: str = typer.Argument(None, help="Center as 'lat,lon'."),
+              at: str | None = AtOpt,
+              radius: float = typer.Option(10.0, "--radius-km"),
+              source: Optional[str] = typer.Option(None, "--source",
+                                                   help="Limit to one source."),
+              db: Path = typer.Option(DB_PATH, "--db"),
+              as_json: bool = JsonOpt) -> None:
+    """Geofenced mesh nodes near a coordinate, sorted by distance."""
+    from . import mesh as mesh_mod
+    lat, lon = _parse_coords(coords, at)
+    with queries.connect(db) as con:
+        rows = mesh_mod.near(con, lat, lon, radius, source=source)
+    _emit(rows, as_json,
+          ["dist_km", "source", "node_id", "name", "node_type",
+           "hw_or_radio", "lat", "lon", "last_seen"],
+          title=f"mesh nodes within {radius} km of {lat},{lon}")
+
+
+@mesh_app.command("search")
+def mesh_search(query: str, db: Path = typer.Option(DB_PATH, "--db"),
+                as_json: bool = JsonOpt) -> None:
+    """Name/node-id substring search across every mesh source."""
+    from . import mesh as mesh_mod
+    with queries.connect(db) as con:
+        rows = mesh_mod.search(con, query)
+    _emit(rows, as_json,
+          ["source", "node_id", "name", "node_type", "hw_or_radio",
+           "lat", "lon", "last_seen"],
+          title=f"mesh nodes matching '{query}'")
+
+
+@mesh_app.command("map")
+def mesh_map_cmd(
+    html: Path = typer.Option(..., "--html", help="Write the map as Leaflet HTML."),
+    at: str | None = AtOpt,
+    radius: float = typer.Option(50.0, "--radius-km"),
+    source: Optional[str] = typer.Option(None, "--source",
+                                         help="Limit to one source."),
+    db: Path = typer.Option(DB_PATH, "--db"),
+) -> None:
+    """Folium map of mesh nodes, colored per source network.
+
+    Without --at, maps every geocoded node (large); --at + --radius-km
+    renders a geofenced region instead.
+    """
+    from . import maps as maps_mod
+    from . import mesh as mesh_mod
+    with queries.connect(db) as con:
+        if at:
+            lat, lon = _parse_coords(None, at)
+            rows = mesh_mod.near(con, lat, lon, radius, source=source)
+            center = (lat, lon)
+        else:
+            rows = mesh_mod.all_nodes(con, source=source)
+            center = None
+    maps_mod.mesh_map(rows, html, center=center)
+    err.print(f"[dim]wrote {html} ({len(rows):,} nodes)[/dim]")
 
 
 @app.command("mcp")

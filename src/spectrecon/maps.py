@@ -48,6 +48,41 @@ def debrief_map(result: dict, out: Path) -> None:
     m.save(str(out))
 
 
+# mesh.nodes source -> marker color
+MESH_SOURCE_COLORS = {
+    "meshtastic": "green",
+    "meshcore": "orange",
+    "ttn_gateway": "blue",
+    "aredn": "red",
+    "reticulum": "cadetblue",
+}
+
+
+def mesh_map(nodes: list[dict], out: Path,
+             center: tuple[float, float] | None = None) -> None:
+    """Mesh-network nodes colored by source (see MESH_SOURCE_COLORS)."""
+    import folium
+
+    pts = [(n["lat"], n["lon"]) for n in nodes]
+    m = _base_map([center] if center else pts)
+    for n in nodes:
+        lines = [f"<b>{n.get('name') or n['node_id']}</b>",
+                 f"{n['source']} - {n.get('node_type') or 'node'}"]
+        if n.get("hw_or_radio"):
+            lines.append(n["hw_or_radio"])
+        if n.get("last_seen"):
+            lines.append(f"last seen {n['last_seen']}")
+        if n.get("dist_km") is not None:
+            lines.append(f"{round(n['dist_km'], 1)} km")
+        folium.CircleMarker(
+            location=[n["lat"], n["lon"]], radius=5,
+            color=MESH_SOURCE_COLORS.get(n["source"], "gray"),
+            fill=True, fill_opacity=0.7,
+            popup=folium.Popup("<br>".join(lines), max_width=300),
+        ).add_to(m)
+    m.save(str(out))
+
+
 def gaps_map(center: tuple[float, float], gaps: dict, out: Path) -> None:
     """Coverage-gap targets: orange=licensed site, purple=ASR tower."""
     import folium
