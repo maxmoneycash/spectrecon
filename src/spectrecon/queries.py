@@ -400,7 +400,7 @@ def stats(con: duckdb.DuckDBPyConnection):
         """
         SELECT table_schema AS schema_name, table_name
         FROM information_schema.tables
-        WHERE table_schema IN ('uls', 'main')
+        WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
         ORDER BY table_schema, table_name
         """,
     )

@@ -62,7 +62,8 @@ def load_ised(db_path: Path, zip_path: Path) -> int:
         con.execute(
             "CREATE OR REPLACE TABLE ised.raw AS "
             f"SELECT * FROM read_csv('{csv_path}', header=false, "
-            "strict_mode=false, columns={" + col_struct + "})"
+            "delim=',', quote='\"', strict_mode=false, "
+            "columns={" + col_struct + "})"
         )
         named = ", ".join(
             f"f{i} AS {name}" for i, name in sorted(ISED_COLUMNS.items())
