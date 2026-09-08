@@ -17,6 +17,32 @@ locally in DuckDB.
 uv sync
 ```
 
+## What it looks like
+
+```console
+$ spectrecon entity "SPACEX"
+ULS:    40 licenses, 79 sites, 14 FRNs (8 name variants resolved)
+IBFS:   2,923 filings — incl. S3157: "SpaceX requests U.S. market access
+        for its German-licensed direct-to-cell..."
+
+$ spectrecon geo "28.5623,-80.5774" --radius-km 50    # Cape Canaveral
+2,080 licensed sites in 3.4s — nearest are SpaceX's own WRVW506/WRVW742,
+30 m from the pad
+
+$ spectrecon sat "STARLINK"
+Gen2 Starlink | NGSO | active
+
+$ spectrecon watch --apps --entity "SPACEX"
+new: application (YG, Hawthorne CA) filed 2026-09-01 — intent before grants
+
+$ spectrecon debrief --html drive.html   # after a wardrive
+SkyTel Ops -> attributed to SkyTel Spectrum LLC (KNKK953, 0.5 km)
+DesertRose Repeater -> ANOMALY: no licensed infrastructure within 2 km
+```
+
+There's also an MCP server (`spectrecon mcp`) that exposes every pivot as
+agent tools over stdio.
+
 ## Usage
 
 ```sh
