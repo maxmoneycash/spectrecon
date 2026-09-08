@@ -100,6 +100,13 @@ def watch_feed(entity: str | None = None, frn: str | None = None,
 
 
 @mcp.tool()
+def survey(lat: float, lon: float, radius_km: float = 5.0) -> str:
+    """Everything RF near a point across every loaded registry (ULS, ASR,
+    IBFS, ISED, Ofcom, ACMA) — one list with a source column."""
+    return _run(queries.survey, lat, lon, radius_km)
+
+
+@mcp.tool()
 def sql(query: str) -> str:
     """Ad-hoc read-only SQL against the database (SELECT only).
     Schemas: uls (licenses), asr (towers), asrapp (tower applications),

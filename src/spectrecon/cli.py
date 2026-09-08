@@ -39,6 +39,20 @@ TOWER_APP_FILES = {"a_tower.zip"}
 IBFS_FILES = {"IBFS.zip"}
 
 JsonOpt = typer.Option(False, "--json", help="Machine-readable JSON output.")
+AtOpt = typer.Option(None, "--at",
+                     help="Center as 'lat,lon' (use this for southern-"
+                          "hemisphere latitudes, e.g. --at '-33.86,151.20').")
+
+
+def _parse_coords(coords: str | None, at: str | None) -> tuple[float, float]:
+    raw = at or coords
+    if not raw:
+        raise typer.BadParameter("provide coords positionally or via --at")
+    try:
+        lat_s, lon_s = raw.replace(" ", "").split(",")
+        return float(lat_s), float(lon_s)
+    except ValueError:
+        raise typer.BadParameter("coords must be 'lat,lon', e.g. 34.0522,-118.2437")
 
 
 def _emit(rows: list[dict], as_json: bool, columns: list[str] | None = None,
@@ -170,7 +184,8 @@ def build(db: Path = typer.Option(DB_PATH, "--db"),
 
 
 @app.command()
-def towers(coords: str = typer.Argument(..., help="Center point as 'lat,lon'."),
+def towers(coords: str = typer.Argument(None, help="Center as 'lat,lon'."),
+           at: str | None = AtOpt,
            radius: float = typer.Option(25.0, "--radius-km"),
            owner: Optional[str] = typer.Option(None, "--owner",
                                                help="Filter by owner name."),
@@ -179,11 +194,7 @@ def towers(coords: str = typer.Argument(..., help="Center point as 'lat,lon'."),
                                                   "instead of registrations."),
            db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt) -> None:
     """Tower pivot: registered antenna structures near a coordinate (ASR)."""
-    try:
-        lat_s, lon_s = coords.replace(" ", "").split(",")
-        lat, lon = float(lat_s), float(lon_s)
-    except ValueError:
-        raise typer.BadParameter("coords must be 'lat,lon', e.g. 34.0522,-118.2437")
+    lat, lon = _parse_coords(coords, at)
     view = "asrapp.applications" if applications else "asr.towers"
     with queries.connect(db) as con:
         rows = queries.towers(con, lat, lon, radius, owner=owner, view=view)
@@ -236,8 +247,10 @@ def entity(query: str, frn: bool = typer.Option(False, "--frn", help="Exact FRN 
     with queries.connect(db) as con:
         result = queries.entity(con, query, exact_frn=frn)
         filings = queries.ibfs_filings(con, query, exact_frn=frn)
+        intl = {} if frn else queries.intl_entities(con, query)
     if as_json:
         result["ibfs_filings"] = filings
+        result["international"] = intl
         console.print_json(json.dumps(result, default=str))
         return
     console.print_json(json.dumps(result["summary"], default=str))
@@ -249,18 +262,36 @@ def entity(query: str, frn: bool = typer.Option(False, "--frn", help="Exact FRN 
               ["callsign", "file_number", "subsystem_code", "status_code",
                "entity_name", "date_filed", "date_grant", "country"],
               title="ibfs filings (satellite / earth station / 214)")
+    for registry, rows in intl.items():
+        _emit(rows, False, title=f"{registry} (international)")
 
 
 @app.command()
-def geo(coords: str = typer.Argument(..., help="Center point as 'lat,lon'."),
+def survey(coords: str = typer.Argument(None, help="Center as 'lat,lon'."),
+           at: str | None = AtOpt,
+           radius: float = typer.Option(5.0, "--radius-km"),
+           db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt) -> None:
+    """Everything RF near a point, across every loaded registry at once.
+
+    ULS licensed sites, ASR towers, IBFS earth stations, ISED/Ofcom/ACMA —
+    one list, one `source` column, sorted by distance.
+    """
+    lat, lon = _parse_coords(coords, at)
+    with queries.connect(db) as con:
+        rows = queries.survey(con, lat, lon, radius)
+    _emit(rows, as_json,
+          ["dist_km", "source", "ident", "owner", "detail", "city", "region",
+           "height_m"],
+          title=f"RF survey: {radius} km around {lat},{lon}")
+
+
+@app.command()
+def geo(coords: str = typer.Argument(None, help="Center as 'lat,lon'."),
+        at: str | None = AtOpt,
         radius: float = typer.Option(25.0, "--radius-km"),
         db: Path = typer.Option(DB_PATH, "--db"), as_json: bool = JsonOpt) -> None:
     """Point pivot: every licensed site within a radius of a coordinate."""
-    try:
-        lat_s, lon_s = coords.replace(" ", "").split(",")
-        lat, lon = float(lat_s), float(lon_s)
-    except ValueError:
-        raise typer.BadParameter("coords must be 'lat,lon', e.g. 34.0522,-118.2437")
+    lat, lon = _parse_coords(coords, at)
     with queries.connect(db) as con:
         rows = queries.geo(con, lat, lon, radius)
     _emit(rows, as_json,
@@ -354,7 +385,8 @@ def watch(
 
 @app.command()
 def gaps(
-    coords: str = typer.Argument(..., help="Center point as 'lat,lon'."),
+    coords: str = typer.Argument(None, help="Center as 'lat,lon'."),
+    at: str | None = AtOpt,
     radius: float = typer.Option(25.0, "--radius-km"),
     coverage_m: float = typer.Option(250.0, "--coverage-m",
                                    help="A site counts as covered if any capture "
@@ -368,11 +400,7 @@ def gaps(
     Compares the licensing graph against every imported wardriving capture
     and lists what you have NOT sniffed yet — the next drive's target list.
     """
-    try:
-        lat_s, lon_s = coords.replace(" ", "").split(",")
-        lat, lon = float(lat_s), float(lon_s)
-    except ValueError:
-        raise typer.BadParameter("coords must be 'lat,lon', e.g. 34.0522,-118.2437")
+    lat, lon = _parse_coords(coords, at)
     with queries.connect(db) as con:
         result = queries.coverage_gaps(con, lat, lon, radius, coverage_m / 1000.0)
     if html:

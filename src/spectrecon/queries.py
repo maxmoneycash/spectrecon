@@ -284,6 +284,116 @@ def coverage_gaps(
     return {"sites": sites, "towers": towers}
 
 
+def survey(con: duckdb.DuckDBPyConnection, lat: float, lon: float,
+           radius_km: float) -> list[dict]:
+    """Everything RF near a point, across every loaded registry.
+
+    One row per emitter/structure with a `source` column:
+    uls (licensed sites), asr (towers), asrapp (pending towers), ibfs
+    (earth stations), ised, ofcom, acma.
+    """
+    dlat = radius_km / 111.0
+    dlon = radius_km / max(1.0, 111.0 * abs(math.cos(math.radians(lat))))
+    out: list[dict] = []
+
+    def in_box(alias: str, latcol: str = "lat", loncol: str = "lon") -> str:
+        dist = (
+            "6371 * 2 * asin(sqrt("
+            f"power(sin(radians({alias}.{latcol} - {lat}) / 2), 2) + "
+            f"cos(radians({lat})) * cos(radians({alias}.{latcol})) * "
+            f"power(sin(radians({alias}.{loncol} - ({lon})) / 2), 2)))"
+        )
+        return dist, (
+            f"{alias}.{latcol} BETWEEN {lat - dlat} AND {lat + dlat} "
+            f"AND {alias}.{loncol} BETWEEN {lon - dlon} AND {lon + dlon} "
+            f"AND {dist} <= {radius_km}"
+        )
+
+    if _has_table(con, "uls", "sites"):
+        dist, box = in_box("s")
+        for r in _rows(con, f"""
+            SELECT 'uls' AS source, {dist} AS dist_km, s.call_sign AS ident,
+                   l.entity_name AS owner, l.radio_service_code AS detail,
+                   s.location_city AS city, s.location_state AS region,
+                   NULL AS height_m, s.lat, s.lon
+            FROM uls.sites s JOIN uls.licenses l USING (unique_system_identifier)
+            WHERE {box}"""):
+            out.append(r)
+    if _has_table(con, "asr", "towers"):
+        dist, box = in_box("t")
+        for r in _rows(con, f"""
+            SELECT 'asr' AS source, {dist} AS dist_km,
+                   t.registration_number AS ident, t.owner_name AS owner,
+                   t.structure_type AS detail, t.city, t.state AS region,
+                   t.height_overall_m AS height_m, t.lat, t.lon
+            FROM asr.towers t WHERE {box}"""):
+            out.append(r)
+    if _has_table(con, "ibfs", "sites"):
+        dist, box = in_box("s")
+        for r in _rows(con, f"""
+            SELECT 'ibfs' AS source, {dist} AS dist_km, s.callsign AS ident,
+                   s.entity_name AS owner, 'earth station' AS detail,
+                   s.city, s.state AS region, NULL AS height_m, s.lat, s.lon
+            FROM ibfs.sites s WHERE {box}"""):
+            out.append(r)
+    if _has_table(con, "ised", "assignments"):
+        dist, box = in_box("a", "lat_num", "lon_num")
+        for r in _rows(con, f"""
+            SELECT DISTINCT 'ised' AS source, {dist} AS dist_km,
+                   a.call_sign AS ident, a.licensee_name AS owner,
+                   a.regulatory_service AS detail, a.station_location AS city,
+                   a.province AS region,
+                   try_cast(a.structure_height_m AS DOUBLE) AS height_m,
+                   a.lat_num AS lat, a.lon_num AS lon
+            FROM ised.assignments a WHERE {box}"""):
+            out.append(r)
+    if _has_table(con, "ofcom", "licences"):
+        dist, box = in_box("o", "lat_num", "lon_num")
+        for r in _rows(con, f"""
+            SELECT 'ofcom' AS source, {dist} AS dist_km,
+                   o.licence_number AS ident, o.licensee AS owner,
+                   o.station_type AS detail, NULL AS city, NULL AS region,
+                   NULL AS height_m, o.lat_num AS lat, o.lon_num AS lon
+            FROM ofcom.licences o WHERE {box}"""):
+            out.append(r)
+    if _has_table(con, "acma", "sites"):
+        dist, box = in_box("s", "lat_num", "lon_num")
+        for r in _rows(con, f"""
+            SELECT 'acma' AS source, {dist} AS dist_km,
+                   CAST(s."SITE_ID" AS VARCHAR) AS ident, s."NAME" AS owner,
+                   NULL AS detail, s."NAME" AS city, s."STATE" AS region,
+                   NULL AS height_m, s.lat_num AS lat, s.lon_num AS lon
+            FROM acma.sites s WHERE {box}"""):
+            out.append(r)
+    out.sort(key=lambda r: r["dist_km"])
+    return out
+
+
+def intl_entities(con: duckdb.DuckDBPyConnection, query: str) -> dict:
+    """Name search across the international registries (summary counts)."""
+    q = f"%{query.strip().upper()}%"
+    out: dict[str, list] = {}
+    if _has_table(con, "ised", "assignments"):
+        out["ised"] = _rows(con, """
+            SELECT licensee_name, count(DISTINCT authorization_number) AS auths,
+                   count(*) AS records
+            FROM ised.assignments WHERE upper(licensee_name) LIKE ?
+            GROUP BY 1 ORDER BY records DESC LIMIT 20""", [q])
+    if _has_table(con, "ofcom", "licences"):
+        out["ofcom"] = _rows(con, """
+            SELECT licensee, count(*) AS licences FROM ofcom.licences
+            WHERE upper(licensee) LIKE ? GROUP BY 1 ORDER BY 2 DESC LIMIT 20""",
+            [q])
+    if _has_table(con, "acma", "client"):
+        out["acma"] = _rows(con, """
+            SELECT "LICENCEE" AS licensee, "TRADING_NAME" AS trading_name,
+                   "POSTAL_STATE" AS state, "CLIENT_NO" AS client_no
+            FROM acma.client
+            WHERE upper("LICENCEE") LIKE ? OR upper("TRADING_NAME") LIKE ?
+            LIMIT 20""", [q, q])
+    return out
+
+
 def stats(con: duckdb.DuckDBPyConnection):
     tables = _rows(
         con,

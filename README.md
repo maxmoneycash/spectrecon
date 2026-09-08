@@ -73,6 +73,11 @@ uv run spectrecon towers "34.0522,-118.2437" --radius-km 5 --applications
 uv run spectrecon download ibfs && uv run spectrecon build --only ibfs
 uv run spectrecon sat "STARLINK"
 uv run spectrecon entity "SPACEX"   # ULS licenses AND IBFS satellite filings
+uv run spectrecon entity "BOEING"   # ...plus ISED (Canada) and ACMA (Australia)
+
+# pivot 2d: everything RF near a point, all registries at once
+uv run spectrecon survey "43.6532,-79.3832" --radius-km 2   # Toronto
+uv run spectrecon survey --at "-33.8688,151.2093"           # southern lat: use --at
 
 # callsign -> license + entity + sites + frequencies
 uv run spectrecon lookup W1AW
@@ -235,8 +240,6 @@ query; narrow with the form's city/state/date fields for full coverage.
 - **IBFS watch**: the dump is labeled daily-updated, but the public mirror
   (transition.fcc.gov) has been stale since 2026-07-16; a working daily
   source (or fcc.report's mirror) would enable diff-based alerting
-- **intl pivots**: ISED/Ofcom/ACMA are loaded but not yet wired into the
-  entity/geo commands (query the schemas directly via `sql` for now)
 - **ELS pagination**: results cap at 100 rows/query; scripted narrowing
   (state × experiment-type sweeps) would give full-registry coverage
 
