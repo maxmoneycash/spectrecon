@@ -92,6 +92,9 @@ def import_capture(db_path: Path, csv_path: Path) -> int:
     Dispatches on file type: .kismet (Kismet SQLite log) or WiGLE CSV.
     Returns rows imported.
     """
+    if csv_path.suffix.lower() == ".lscap":
+        from . import lscap as lscap_mod
+        return lscap_mod.load_lscap(db_path, csv_path)
     if csv_path.suffix.lower() == ".kismet":
         rows = parse_kismet(csv_path)
     else:
@@ -229,6 +232,23 @@ def debrief(
     """
     con = duckdb.connect(str(db_path), read_only=True)
     try:
+        has_obs = con.execute(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema='capture' AND table_name='observations'"
+        ).fetchone()[0]
+        if not has_obs:
+            from . import lscap as lscap_mod
+            lora = lscap_mod.heard(con, capture_file)
+            return {
+                "summary": {"observations": 0, "unique_devices": 0,
+                            "unique_ssids": 0, "first_obs": None,
+                            "last_obs": None, "devices_by_type": {}},
+                "devices": [],
+                "attributions": [],
+                "anomalies": [],
+                "gadgets": [],
+                "lora": lora,
+            }
         where = "WHERE capture_file = ?" if capture_file else ""
         params = [capture_file] if capture_file else []
 
@@ -337,12 +357,15 @@ def debrief(
                                     d["bssid"]))
 
         attributions = attribute_ssids(con, devices) if has_sites else []
+        from . import lscap as lscap_mod
+        lora = lscap_mod.heard(con, capture_file)
         return {
             "summary": summary_d,
             "devices": devices,
             "attributions": attributions,
             "anomalies": anomalies,
             "gadgets": gadgets,
+            "lora": lora,
         }
     finally:
         con.close()

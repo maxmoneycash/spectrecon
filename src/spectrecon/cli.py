@@ -672,18 +672,20 @@ def els_import(
 
 @app.command("import")
 def import_capture(
-    csv_file: Path = typer.Argument(..., help="WiGLE-format wardriving CSV."),
+    csv_file: Path = typer.Argument(
+        ..., help="WiGLE CSV, Kismet .kismet, or Lilyshark .lscap."),
     db: Path = typer.Option(DB_PATH, "--db"),
 ) -> None:
-    """Import a wardriving capture (WiGLE CSV) into the capture schema."""
+    """Import a capture: WiGLE CSV, Kismet log, or Lilyshark .lscap."""
     if not csv_file.exists():
         err.print(f"[red]{csv_file} not found[/red]")
         raise typer.Exit(1)
     n = ingest_mod.import_capture(db, csv_file)
     if n == 0:
-        err.print("[yellow]no observations parsed - is this a WiGLE-format CSV?[/yellow]")
+        err.print("[yellow]no observations parsed[/yellow]")
         raise typer.Exit(1)
-    console.print(f"[green]{n} observations imported from {csv_file.name}[/green]")
+    kind = csv_file.suffix.lower().lstrip(".") or "csv"
+    console.print(f"[green]{n} {kind} rows imported from {csv_file.name}[/green]")
 
 
 @app.command()
@@ -733,6 +735,11 @@ def debrief(
               ["gadget", "gadget_family", "ssid", "bssid", "obs_type",
                "rssi", "gadget_via"],
               title="RF gadgets / audit rigs / mesh nodes")
+    if result.get("lora"):
+        _emit(result["lora"], False,
+              ["from_bang", "frames", "rssi_min", "rssi_max", "freq_hz",
+               "lilyshark_deck", "gadget", "mesh_name", "mesh_source"],
+              title="LoRa heard (Lilyshark .lscap → mesh.nodes)")
     _emit(result["anomalies"], False,
           ["bssid", "ssid", "rssi", "obs_type", "sightings", "lat", "lon"],
           title=f"anomalies (no licensed infrastructure within {anomaly_km} km)")

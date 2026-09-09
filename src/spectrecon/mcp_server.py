@@ -131,6 +131,16 @@ def mesh_stats() -> str:
 
 
 @mcp.tool()
+def lora_heard(capture_file: str | None = None) -> str:
+    """Unique Meshtastic transmitters in imported Lilyshark .lscap frames,
+    joined to mesh.nodes when a map dump is loaded."""
+    from . import lscap as lscap_mod
+    with queries.connect(DB_PATH) as con:
+        return json.dumps(lscap_mod.heard(con, capture_file), default=str,
+                          indent=1)
+
+
+@mcp.tool()
 def identify_rf(ssid: str = "", name: str = "", bssid: str = "",
                 auth_mode: str = "") -> str:
     """Identify a Wi-Fi/BLE sighting against the RF gadget catalog

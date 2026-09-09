@@ -149,6 +149,7 @@ doesn't have:
 uv run spectrecon download oui        # one-time: IEEE vendor registry
 uv run spectrecon import WIGLE005.CSV # WiGLE CSV...
 uv run spectrecon import rig.kismet   # ...or Kismet SQLite logs
+uv run spectrecon import capture.lscap # Lilyshark T-Deck LoRa capture
 uv run spectrecon debrief
 uv run spectrecon debrief --html drive.html      # Leaflet map to screenshot
 uv run spectrecon debrief --geojson drive.geojson # or Earth/QGIS
@@ -163,6 +164,11 @@ For every unique BSSID (at its strongest-RSSI position):
   (`SkyTel Ops` heard 0.5 km from a SkyTel Spectrum LLC site -> attributed)
 - **anomalies**: emitters with no licensed infrastructure within
   `--anomaly-km` (default 2) — rogue/interesting by construction
+- **lora / Lilyshark**: `.lscap` frames from a T-Deck. The unencrypted
+  Meshtastic radio header gives `from` node IDs (`!xxxxxxxx`); those join
+  `mesh.nodes` when a map dump is loaded. Firmware identity `!4c534b01`
+  (and names starting `Lilyshark`) tags a Lilyshark T-Deck.
+
 - **gadgets**: Flipper Zero, Hak5 Pineapple, ESP32 Marauder, Pwnagotchi,
   Deauther, Biscuit, **Lilyshark T-Deck** (`Lilyshark <short>` over the
   Meshtastic BLE service), Meshtastic/MeshCore/RNode, and chip OUIs
