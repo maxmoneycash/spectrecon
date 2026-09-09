@@ -164,8 +164,10 @@ For every unique BSSID (at its strongest-RSSI position):
 - **anomalies**: emitters with no licensed infrastructure within
   `--anomaly-km` (default 2) — rogue/interesting by construction
 - **gadgets**: Flipper Zero, Hak5 Pineapple, ESP32 Marauder, Pwnagotchi,
-  Deauther, Biscuit, Meshtastic/MeshCore/RNode, and chip OUIs (Espressif,
-  Raspberry Pi, Alfa) tagged from SSID, BLE name, service UUID, or OUI.
+  Deauther, Biscuit, **Lilyshark T-Deck** (`Lilyshark <short>` over the
+  Meshtastic BLE service), Meshtastic/MeshCore/RNode, and chip OUIs
+  (Espressif, Raspberry Pi, Alfa) tagged from SSID, BLE name, service UUID,
+  or OUI.
   Identification only — `spectrecon gadgets` lists the catalog.
 
 ```sh

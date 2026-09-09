@@ -119,6 +119,17 @@ CATALOG: tuple[Fingerprint, ...] = (
         auth=(r"\[RIG:biscuit",),
     ),
     Fingerprint(
+        # LilyGO T-Deck running lilyshark.com firmware. Advertises the
+        # Meshtastic GATT service so the official app can pair, but the
+        # local name is "Lilyshark <short>" (tdeck_ble.cpp / sim_main.cpp).
+        # Must sit above the generic Meshtastic fingerprint.
+        id="lilyshark-tdeck", label="Lilyshark T-Deck", family="rig",
+        ssid=(r"^lilyshark",),
+        name=(r"^lilyshark",),
+        uuids=("6C736B00-9C1D-4B7A-B3F2-1D0E5A7C4E10",),  # LSK analyzer GATT
+        auth=(r"\[RIG:lilyshark",),
+    ),
+    Fingerprint(
         id="meshtastic", label="Meshtastic node", family="mesh",
         ssid=(r"meshtastic",),
         name=(r"meshtastic",),

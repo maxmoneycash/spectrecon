@@ -24,6 +24,19 @@ def test_marauder_beats_espressif_oui():
     assert chip is not None and chip.family == "chip" and chip.id == "espressif-esp"
 
 
+def test_lilyshark_tdeck_beats_meshtastic_uuid():
+    """Firmware advertises Meshtastic's service UUID under a Lilyshark name."""
+    hit = identify(
+        name="Lilyshark 4B01",
+        service_uuids=["6ba1b218-15a8-461f-9fa8-5dcae273eafd"],
+    )
+    assert hit is not None and hit.id == "lilyshark-tdeck"
+    lsk = identify(service_uuids=["6c736b00-9c1d-4b7a-b3f2-1d0e5a7c4e10"])
+    assert lsk is not None and lsk.id == "lilyshark-tdeck"
+    stock = identify(name="Meshtastic_ab12")
+    assert stock is not None and stock.id == "meshtastic"
+
+
 def test_mesh_and_biscuit_auth_tags():
     assert identify(auth_mode="[MESH:meshtastic]").id == "meshtastic"
     assert identify(name="Biscuit").id == "biscuit"
@@ -38,7 +51,7 @@ def test_deauther_and_pwnagotchi():
 def test_catalog_covers_core_ids():
     ids = {r["id"] for r in catalog_rows()}
     assert {"flipper-zero", "wifi-pineapple", "esp32-marauder",
-            "meshtastic", "biscuit"} <= ids
+            "lilyshark-tdeck", "meshtastic", "biscuit"} <= ids
 
 
 def test_apply_stamps_device_dict():
