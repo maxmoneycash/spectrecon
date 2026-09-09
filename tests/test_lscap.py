@@ -17,19 +17,25 @@ def _write_lscap(
     sequence=0,
     timestamp_us=9_000_000,
     synthetic=False,
+    net_relayed=False,
     crc=2,
+    present=0x5FFF,
 ) -> None:
     rssi_x10 = -1021
     snr_x10 = 11
     captured = len(payload)
-    meta = lscap.SYNTHETIC_FLAG if synthetic else 0
+    meta = 0
+    if synthetic:
+        meta |= lscap.SYNTHETIC_FLAG
+    if net_relayed:
+        meta |= lscap.NET_RELAYED_FLAG
     file_hdr = lscap.FILE_HEADER.pack(
         lscap.FILE_MAGIC, 1, 1, lscap.FILE_HEADER_SIZE,
         lscap.RECORD_HEADER_SIZE, 0, 1_000_000, 0,
     )
     rec = lscap.RECORD_HEADER.pack(
         lscap.RECORD_MAGIC, lscap.RECORD_HEADER_SIZE, 1,
-        captured, captured, sequence, timestamp_us, 0x5FFF,
+        captured, captured, sequence, timestamp_us, present,
         freq, 250_000, 0, 0, 1_000_000, 0,
         rssi_x10, snr_x10, 16, 43, 1, 0, 0,
         11, 5, 20, 0, 1, direction, crc, meta, b"\x00\x00\x00",
@@ -37,8 +43,11 @@ def _write_lscap(
     path.write_bytes(file_hdr + rec + payload)
 
 
-def _meshtastic_frame(from_node: int, to_node: int = 0xFFFFFFFF) -> bytes:
+def _meshtastic_frame(from_node: int, to_node: int = 0xFFFFFFFF,
+                     *, via_mqtt=False) -> bytes:
     flags = 0x03 | (3 << 5)  # hop_limit 3, hop_start 3
+    if via_mqtt:
+        flags |= 0x10
     return (
         to_node.to_bytes(4, "little")
         + from_node.to_bytes(4, "little")
@@ -133,6 +142,8 @@ def test_tx_identifies_capturing_deck(tmp_path):
     assert heard[0]["capturing_deck"] is True
     assert heard[0]["role"] == "tx"
     assert heard[0]["tx_frames"] == 1
+    assert heard[0]["rssi_min"] is None
+    assert heard[0]["rx_frames"] == 0
 
 
 def test_ble_short_name_joins_field_gps(tmp_path):
@@ -187,3 +198,40 @@ def test_sidecar_and_corroboration(tmp_path):
     assert len(pairs) == 1
     assert pairs[0]["via"] == "witness"
     assert pairs[0]["decks"] == 2
+
+
+def test_on_air_excludes_synthetic_crc_mqtt_relay(tmp_path):
+    db = tmp_path / "t.db"
+    _write_lscap(tmp_path / "ok.lscap", _meshtastic_frame(0x11111111))
+    _write_lscap(
+        tmp_path / "sim.lscap", _meshtastic_frame(0x22222222), synthetic=True
+    )
+    _write_lscap(
+        tmp_path / "badcrc.lscap", _meshtastic_frame(0x33333333), crc=3
+    )
+    _write_lscap(
+        tmp_path / "mqtt.lscap", _meshtastic_frame(0x44444444, via_mqtt=True)
+    )
+    _write_lscap(
+        tmp_path / "inj.lscap", _meshtastic_frame(0x55555555), net_relayed=True
+    )
+    for name in ("ok", "sim", "badcrc", "mqtt", "inj"):
+        lscap.load_lscap(db, tmp_path / f"{name}.lscap")
+    con = duckdb.connect(str(db), read_only=True)
+    heard = lscap.heard(con)
+    con.close()
+    bangs = {h["from_bang"] for h in heard}
+    assert bangs == {"!11111111"}
+
+
+def test_rssi_absent_when_present_bit_clear(tmp_path):
+    cap = tmp_path / "deck.lscap"
+    _write_lscap(cap, _meshtastic_frame(0x1234ABCD), present=0x0003)
+    db = tmp_path / "t.db"
+    lscap.load_lscap(db, cap)
+    con = duckdb.connect(str(db), read_only=True)
+    heard = lscap.heard(con)
+    row = con.execute("SELECT rssi_dbm, snr_db FROM lscap.frames").fetchone()
+    con.close()
+    assert row == (None, None)
+    assert heard[0]["rssi_min"] is None

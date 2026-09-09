@@ -184,6 +184,11 @@ For every unique BSSID (at its strongest-RSSI position):
     share a key heard the same over-the-air frame. Without a wall clock,
     identical payload hashes still corroborate.
 
+  Simulator frames, invalid CRC, MQTT-injected (`via_mqtt`), and
+  net-relayed (USB `LSK INJ`) copies stay in `lscap.frames` but do not
+  count as heard. RSSI/SNR are only a received measurement on RX frames
+  whose `present_fields` bits are set — TX records are not 0 dBm.
+
 - **gadgets**: Flipper Zero, Hak5 Pineapple, ESP32 Marauder, Pwnagotchi,
   Deauther, Biscuit, **Lilyshark T-Deck** (`Lilyshark <short>` over the
   Meshtastic BLE service), Meshtastic/MeshCore/RNode, and chip OUIs

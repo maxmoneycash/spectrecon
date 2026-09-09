@@ -34,6 +34,7 @@ FILE_HEADER_SIZE = 24
 RECORD_HEADER_SIZE = 80
 MAX_CAPTURED_LENGTH = 255
 SYNTHETIC_FLAG = 1 << 2
+NET_RELAYED_FLAG = 1 << 3  # LSK INJ / USB-relayed; not this deck's air
 
 FILE_HEADER = struct.Struct("<4sHHHHIII")
 RECORD_HEADER = struct.Struct("<4sHHHHQQIIIIIIihhHHHhbBBBBBBBB3s")
@@ -107,6 +108,8 @@ DIRECTION_TX = 2
 CRC_VALID = 2
 PRESENT_TIMESTAMP = 1 << 0
 PRESENT_CENTER_FREQUENCY = 1 << 1
+PRESENT_RSSI = 1 << 5
+PRESENT_SNR = 1 << 6
 
 # Field Receipts witness key (docs/protocol/field-receipts.md).
 WITNESS_FREQ_STEP_HZ = 25_000
@@ -295,8 +298,16 @@ def iter_frames(path: Path) -> list[dict]:
             "freq_hz": freq_hz,
             "bandwidth_hz": bw_hz,
             "airtime_us": airtime_us,
-            "rssi_dbm": rssi_x10 / 10.0,
-            "snr_db": snr_x10 / 10.0,
+            "rssi_dbm": (
+                rssi_x10 / 10.0
+                if (present_fields & PRESENT_RSSI) and direction == DIRECTION_RX
+                else None
+            ),
+            "snr_db": (
+                snr_x10 / 10.0
+                if (present_fields & PRESENT_SNR) and direction == DIRECTION_RX
+                else None
+            ),
             "profile_id": profile_id,
             "sync_word": sync_word,
             "spreading_factor": sf,
@@ -305,6 +316,7 @@ def iter_frames(path: Path) -> list[dict]:
             "direction": direction,
             "crc_state": crc,
             "synthetic": bool(meta & SYNTHETIC_FLAG),
+            "net_relayed": bool(meta & NET_RELAYED_FLAG),
             "payload": payload,
             "original_length": original,
             "captured_length": captured,
@@ -713,6 +725,7 @@ def classify_frame(frame: dict) -> dict:
         "hop_limit": None,
         "hop_direct": False,
         "channel_hash": None,
+        "via_mqtt": False,
     }
     payload = frame["payload"]
     if protocol == "meshtastic":
@@ -728,6 +741,7 @@ def classify_frame(frame: dict) -> dict:
                 "hop_limit": hdr["hop_limit"],
                 "hop_direct": hdr["hop_start"] == hdr["hop_limit"],
                 "channel_hash": hdr["channel_hash"],
+                "via_mqtt": hdr["via_mqtt"],
             })
             decoded = try_meshtastic_default_payload(hdr)
             if decoded:
@@ -805,13 +819,15 @@ CREATE TABLE IF NOT EXISTS lscap.frames (
     payload_sha256 VARCHAR,
     witness_key VARCHAR,
     witness_reason VARCHAR,
-    unix_seconds BIGINT
+    unix_seconds BIGINT,
+    via_mqtt BOOLEAN,
+    net_relayed BOOLEAN
 )
 """
 
-_FRAME_COLS = 39
+_FRAME_COLS = 41
 _REQUIRED_COLS = {"identity", "direction", "payload_sha256", "witness_key",
-                  "hop_direct"}
+                  "hop_direct", "via_mqtt", "net_relayed"}
 
 
 def _file_ticks_per_second(path: Path) -> int:
@@ -870,6 +886,7 @@ def load_lscap(db_path: Path, path: Path, epoch: int | None = None) -> int:
             f["captured_length"], info["hop_start"], info["hop_limit"],
             info["hop_direct"], info["channel_hash"],
             payload_sha, wkey, reason, unix,
+            info["via_mqtt"], f["net_relayed"],
         ))
     con = duckdb.connect(str(db_path))
     try:
@@ -901,22 +918,36 @@ def heard(con, capture_file: str | None = None) -> list[dict]:
 
     if not _has_table(con, "lscap", "frames"):
         return []
-    where = "WHERE identity IS NOT NULL"
+    has_direction = _column_in(con, "lscap", "frames", "direction")
+    has_hygiene = _column_in(con, "lscap", "frames", "net_relayed")
+    # On-air: this deck received the frame over LoRa. TX, simulator, bad CRC,
+    # USB/MQTT injection, and net-relayed copies are stored but are not heard.
+    if has_hygiene:
+        on_air = (
+            "(direction = 1 AND (synthetic IS NULL OR synthetic = false) "
+            "AND (crc_state IS NULL OR crc_state = 2) "
+            "AND COALESCE(net_relayed, false) = false "
+            "AND COALESCE(via_mqtt, false) = false)"
+        )
+        where = f"WHERE identity IS NOT NULL AND (direction = 2 OR {on_air})"
+    else:
+        on_air = "true"
+        where = "WHERE identity IS NOT NULL"
     params: list = []
     if capture_file:
         where += " AND capture_file = ?"
         params.append(capture_file)
-    has_direction = _column_in(con, "lscap", "frames", "direction")
     extra = ""
     if has_direction:
-        extra = """
-               sum(CASE WHEN direction = 1 THEN 1 ELSE 0 END) AS rx_frames,
+        extra = f"""
+               sum(CASE WHEN {on_air} THEN 1 ELSE 0 END) AS rx_frames,
                sum(CASE WHEN direction = 2 THEN 1 ELSE 0 END) AS tx_frames,
-               sum(CASE WHEN hop_direct THEN 1 ELSE 0 END) AS direct_frames,
-               count(DISTINCT witness_key) FILTER (WHERE witness_key IS NOT NULL)
-                   AS witness_keys,
+               sum(CASE WHEN hop_direct AND {on_air} THEN 1 ELSE 0 END)
+                   AS direct_frames,
+               count(DISTINCT witness_key) FILTER (
+                   WHERE witness_key IS NOT NULL AND {on_air}) AS witness_keys,
                count(DISTINCT payload_sha256) FILTER (
-                   WHERE payload_sha256 IS NOT NULL AND direction != 2)
+                   WHERE payload_sha256 IS NOT NULL AND {on_air})
                    AS payload_hashes,
                bool_or(direction = 2) AS self_tx
         """
@@ -936,7 +967,10 @@ def heard(con, capture_file: str | None = None) -> list[dict]:
                any_value(from_bang) AS from_bang,
                bool_or(lilyshark_deck) AS lilyshark_deck,
                count(*) AS frames,
-               min(rssi_dbm) AS rssi_min, max(rssi_dbm) AS rssi_max,
+               min(rssi_dbm) FILTER (WHERE rssi_dbm IS NOT NULL AND {on_air})
+                   AS rssi_min,
+               max(rssi_dbm) FILTER (WHERE rssi_dbm IS NOT NULL AND {on_air})
+                   AS rssi_max,
                any_value(freq_hz) AS freq_hz,
                any_value(profile_id) AS profile_id,
                bool_or(default_key) AS default_key,
@@ -1153,7 +1187,14 @@ def corroborate(con) -> list[dict]:
         return []
     if not _column_in(con, "lscap", "frames", "payload_sha256"):
         return []
-    by_key = _rows(con, """
+    hygiene = "AND COALESCE(synthetic, false) = false"
+    if _column_in(con, "lscap", "frames", "net_relayed"):
+        hygiene += (
+            " AND COALESCE(net_relayed, false) = false"
+            " AND COALESCE(via_mqtt, false) = false"
+            " AND (crc_state IS NULL OR crc_state = 2)"
+        )
+    by_key = _rows(con, f"""
         SELECT 'witness' AS via, witness_key AS key,
                count(DISTINCT capture_file) AS decks,
                count(*) AS frames,
@@ -1162,13 +1203,13 @@ def corroborate(con) -> list[dict]:
         FROM lscap.frames
         WHERE witness_key IS NOT NULL
           AND (direction IS NULL OR direction != 2)
-          AND synthetic = false
+          {hygiene}
         GROUP BY witness_key
         HAVING count(DISTINCT capture_file) >= 2
     """)
     if by_key:
         return by_key
-    return _rows(con, """
+    return _rows(con, f"""
         SELECT 'payload' AS via, payload_sha256 AS key,
                count(DISTINCT capture_file) AS decks,
                count(*) AS frames,
@@ -1177,7 +1218,7 @@ def corroborate(con) -> list[dict]:
         FROM lscap.frames
         WHERE payload_sha256 IS NOT NULL
           AND (direction IS NULL OR direction != 2)
-          AND synthetic = false
+          {hygiene}
         GROUP BY payload_sha256
         HAVING count(DISTINCT capture_file) >= 2
     """)
