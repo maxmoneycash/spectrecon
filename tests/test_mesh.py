@@ -130,6 +130,14 @@ def test_meshtastic_scaling_and_detail():
     assert detail["batteryLevel"] == 87
 
 
+def test_meshcore_sensor_type():
+    rows = mesh.parse_meshcore([{
+        "public_key": "dd44" * 16, "type": 4, "adv_name": "LA Sensor",
+        "adv_lat": 34.06, "adv_lon": -118.25,
+    }])
+    assert rows[0]["node_type"] == "sensor"
+
+
 def test_aredn_js_wrapper():
     rows = mesh.parse_aredn(AREDN_JS)
     la = next(r for r in rows if r["node_id"] == "W6LA-TEST-1")

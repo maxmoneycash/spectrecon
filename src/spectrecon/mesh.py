@@ -10,7 +10,8 @@ Source notes (all verified live 2026-09):
 - Meshtastic  meshmap.net: one JSON object keyed by node id; latitude and
   longitude are signed ints x1e-7; seenBy maps MQTT topic -> unix ts.
 - MeshCore    map.meshcore.io: JSON array; type 1=client/companion,
-  2=repeater, 3=room server; radio params under params{freq,bw,cr,sf}.
+  2=repeater, 3=room server, 4=sensor; radio params under
+  params{freq,bw,cr,sf}.
 - TTN         mapper.packetbroker.net: LoRaWAN gateways seen by Packet
   Broker; coordinates nested under location{latitude,longitude,altitude}.
 - AREDN       worldmap.arednmesh.org: amateur-radio mesh; a JavaScript file
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 USER_AGENT = f"spectrecon/{__version__} (mesh network map aggregator)"
 
-MESHCORE_TYPES = {1: "client", 2: "repeater", 3: "room server"}
+MESHCORE_TYPES = {1: "client", 2: "repeater", 3: "room server", 4: "sensor"}
 
 
 def _iso(ts) -> str | None:
