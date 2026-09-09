@@ -27,9 +27,13 @@ def debrief_map(result: dict, out: Path) -> None:
     m = _base_map([(d["lat"], d["lon"]) for d in devices])
     for d in devices:
         bssid = d["bssid"]
-        color = ("red" if bssid in anomaly_bssids
+        color = ("darkred" if d.get("gadget_family") in ("gadget", "rig")
+                 else "orange" if d.get("gadget_family") == "mesh"
+                 else "red" if bssid in anomaly_bssids
                  else "green" if bssid in attributed else "blue")
         lines = [f"<b>{d['ssid'] or '(hidden)'}</b>", bssid]
+        if d.get("gadget"):
+            lines.append(f"gadget: {d['gadget']} ({d.get('gadget_via')})")
         if d.get("vendor"):
             lines.append(d["vendor"])
         if d.get("randomized_mac"):

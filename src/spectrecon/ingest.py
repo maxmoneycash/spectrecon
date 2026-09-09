@@ -258,13 +258,15 @@ def debrief(
             f"""
             SELECT bssid, any_value(ssid) AS ssid, arg_max(rssi, rssi) AS rssi,
                    arg_max(lat, rssi) AS lat, arg_max(lon, rssi) AS lon,
-                   any_value(obs_type) AS obs_type, count(*) AS sightings
+                   any_value(obs_type) AS obs_type,
+                   any_value(auth_mode) AS auth_mode, count(*) AS sightings
             FROM capture.observations {where}
             GROUP BY bssid
             """,
             params,
         ).fetchall()
-        best_cols = ["bssid", "ssid", "rssi", "lat", "lon", "obs_type", "sightings"]
+        best_cols = ["bssid", "ssid", "rssi", "lat", "lon", "obs_type",
+                     "auth_mode", "sightings"]
         devices = [dict(zip(best_cols, r)) for r in best]
 
         # nearest licensed site + nearest tower per device (bounding-box limited)
@@ -320,11 +322,19 @@ def debrief(
         anomalies.sort(key=lambda d: d["bssid"])
 
         enrich_vendors(con, devices)
+        from . import gadgets as gadgets_mod
+        gadgets_mod.apply(devices)
         for a in anomalies:
             match = next((d for d in devices if d["bssid"] == a["bssid"]), None)
             if match:
                 a["vendor"] = match.get("vendor")
                 a["randomized_mac"] = match.get("randomized_mac")
+                a["gadget"] = match.get("gadget")
+
+        gadgets = [d for d in devices if d.get("gadget")
+                   and d.get("gadget_family") in ("gadget", "rig", "mesh")]
+        gadgets.sort(key=lambda d: (d["gadget_family"] or "", d["gadget"] or "",
+                                    d["bssid"]))
 
         attributions = attribute_ssids(con, devices) if has_sites else []
         return {
@@ -332,6 +342,7 @@ def debrief(
             "devices": devices,
             "attributions": attributions,
             "anomalies": anomalies,
+            "gadgets": gadgets,
         }
     finally:
         con.close()
@@ -396,6 +407,8 @@ def to_geojson(debrief_result: dict) -> dict:
             "bssid": d["bssid"], "ssid": d["ssid"], "rssi": d["rssi"],
             "type": d["obs_type"],
             "anomaly": d["bssid"] in anomaly_bssids,
+            "gadget": d.get("gadget"),
+            "gadget_id": d.get("gadget_id"),
         }
         if d["bssid"] in attributed:
             props["attributed_to"] = attributed[d["bssid"]]["entity_name"]

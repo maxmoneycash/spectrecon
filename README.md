@@ -163,6 +163,15 @@ For every unique BSSID (at its strongest-RSSI position):
   (`SkyTel Ops` heard 0.5 km from a SkyTel Spectrum LLC site -> attributed)
 - **anomalies**: emitters with no licensed infrastructure within
   `--anomaly-km` (default 2) — rogue/interesting by construction
+- **gadgets**: Flipper Zero, Hak5 Pineapple, ESP32 Marauder, Pwnagotchi,
+  Deauther, Biscuit, Meshtastic/MeshCore/RNode, and chip OUIs (Espressif,
+  Raspberry Pi, Alfa) tagged from SSID, BLE name, service UUID, or OUI.
+  Identification only — `spectrecon gadgets` lists the catalog.
+
+```sh
+uv run spectrecon gadgets
+uv run spectrecon debrief            # gadgets table sits above anomalies
+```
 
 ## The gaps pivot (pre-drive planner)
 

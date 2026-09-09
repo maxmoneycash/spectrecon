@@ -131,6 +131,21 @@ def mesh_stats() -> str:
 
 
 @mcp.tool()
+def identify_rf(ssid: str = "", name: str = "", bssid: str = "",
+                auth_mode: str = "") -> str:
+    """Identify a Wi-Fi/BLE sighting against the RF gadget catalog
+    (Flipper Zero, WiFi Pineapple, ESP32 Marauder, Meshtastic, …).
+    Returns null if nothing matches."""
+    from . import gadgets as gadgets_mod
+    hit = gadgets_mod.identify(ssid=ssid, name=name, bssid=bssid,
+                               auth_mode=auth_mode)
+    if hit is None:
+        return json.dumps(None)
+    return json.dumps({"id": hit.id, "label": hit.label,
+                       "family": hit.family, "via": hit.via})
+
+
+@mcp.tool()
 def sql(query: str) -> str:
     """Ad-hoc read-only SQL against the database (SELECT only).
     Schemas: uls (licenses), asr (towers), asrapp (tower applications),

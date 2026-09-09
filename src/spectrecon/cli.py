@@ -702,7 +702,8 @@ def debrief(
     """Drive debrief: enrich a capture against the licensing graph.
 
     Every unique BSSID gets nearest licensed sites/towers; SSIDs matching a
-    nearby licensee's entity name are attributed; emitters with no licensed
+    nearby licensee's entity name are attributed; known RF gadgets (Flipper,
+    Pineapple, Marauder, mesh nodes, …) are tagged; emitters with no licensed
     infrastructure within --anomaly-km are flagged as anomalous.
     """
     result = ingest_mod.debrief(db, capture_file=capture_file,
@@ -727,9 +728,28 @@ def debrief(
         _emit(result["attributions"], False,
               ["ssid", "entity_name", "call_sign", "radio_service_code", "dist_km"],
               title="attributed (SSID matches nearby licensee)")
+    if result.get("gadgets"):
+        _emit(result["gadgets"], False,
+              ["gadget", "gadget_family", "ssid", "bssid", "obs_type",
+               "rssi", "gadget_via"],
+              title="RF gadgets / audit rigs / mesh nodes")
     _emit(result["anomalies"], False,
           ["bssid", "ssid", "rssi", "obs_type", "sightings", "lat", "lon"],
           title=f"anomalies (no licensed infrastructure within {anomaly_km} km)")
+
+
+@app.command()
+def gadgets(as_json: bool = JsonOpt) -> None:
+    """List RF gadget fingerprints (Flipper, Pineapple, Marauder, mesh, …).
+
+    These are advertised names, setup SSIDs, BLE UUIDs, and OUIs used by
+    `debrief` and Spectrecon Field to tag well-known radios. Identification
+    only — no pairing, no payloads.
+    """
+    from . import gadgets as gadgets_mod
+    _emit(gadgets_mod.catalog_rows(), as_json,
+          ["id", "label", "family", "ssid", "ble_name", "oui"],
+          title="RF gadget fingerprints")
 
 
 @app.command()
