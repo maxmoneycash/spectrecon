@@ -111,10 +111,13 @@ def test_parse_lilyshark_ble_name():
     parsed = lscap.parse_lilyshark_name("Lilyshark 4B01")
     assert parsed is not None
     assert parsed["short"] == "4B01"
-    assert parsed["from_bang"] == "!4c534b01"
+    assert parsed["bang_mask"] == "!****4B01"
+    assert "from_bang" not in parsed
+    assert "from_node" not in parsed
     assert lscap.parse_lilyshark_name("Lilyshark-4B01")["short"] == "4B01"
     assert lscap.parse_lilyshark_name("Meshtastic_ab12") is None
     assert lscap.node_matches_short(lscap.LILYSHARK_NODE_NUM, "4B01")
+    assert lscap.bang_mask("1B44") == "!****1B44"
 
 
 def test_witness_vector():
@@ -144,6 +147,58 @@ def test_tx_identifies_capturing_deck(tmp_path):
     assert heard[0]["tx_frames"] == 1
     assert heard[0]["rssi_min"] is None
     assert heard[0]["rx_frames"] == 0
+
+
+def test_ble_short_is_not_simulator_node(tmp_path):
+    """A Field sighting of Lilyshark 4B01 is a suffix, not !4c534b01."""
+    from spectrecon import ingest as ingest_mod
+
+    csv = tmp_path / "field.csv"
+    csv.write_text(
+        "WigleWifi-1.4,appRelease=test,model=iPhone,release=1,"
+        "device=test,display=x,board=x,brand=Apple\n"
+        "MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,"
+        "CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type\n"
+        "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE,Lilyshark 4B01,[RIG:lilyshark],"
+        "2026-09-01 10:01:00,0,-55,35.1,-80.2,100,8,BLE\n"
+    )
+    db = tmp_path / "t.db"
+    ingest_mod.import_capture(db, csv)
+    result = ingest_mod.debrief(db)
+    decks = result["capturing_decks"]
+    assert decks[0]["short"] == "4B01"
+    assert decks[0]["bang_mask"] == "!****4B01"
+    assert decks[0]["from_bang"] is None
+    assert decks[0]["identity"] is None
+    gadgets = result["gadgets"]
+    assert gadgets[0]["lilyshark_short"] == "4B01"
+    assert gadgets[0].get("from_bang") is None
+    geo = ingest_mod.to_geojson(result)
+    kinds = {f["properties"].get("kind") for f in geo["features"]}
+    assert "capturing-deck" in kinds
+
+
+def test_lsk_only_sensor_in_geojson(tmp_path):
+    from spectrecon import ingest as ingest_mod
+    from spectrecon import lsk as lsk_mod
+
+    db = tmp_path / "t.db"
+    lsk_mod.load_lsk_text(
+        db,
+        'LSK ID {"app":"lilyshark","fw":"x","board":"t-deck","node":"!96f61b44"}\n'
+        'LSK T {"gps":"GPS 9","sim":false,"lat":37.911,"lon":-122.018,"sat":9}\n',
+        "usb.lsk",
+    )
+    result = ingest_mod.debrief(db)
+    assert result["lora"] == []
+    deck = result["capturing_decks"][0]
+    assert deck["from_bang"] == "!96f61b44"
+    assert deck["position_via"] == "lsk-t"
+    geo = ingest_mod.to_geojson(result)
+    feats = [f for f in geo["features"]
+             if f["properties"].get("kind") == "capturing-deck"]
+    assert len(feats) == 1
+    assert feats[0]["geometry"]["coordinates"][0] == -122.018
 
 
 def test_ble_short_name_joins_field_gps(tmp_path):

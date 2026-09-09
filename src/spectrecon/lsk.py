@@ -363,6 +363,7 @@ def lsk_decks(con) -> list[dict]:
             "from_node": node,
             "from_bang": bang,
             "short": short,
+            "bang_mask": f"!****{short}" if short else None,
             "fw": s.get("fw"),
             "board": s.get("board"),
             "lat": fix["lat"] if fix else None,
@@ -417,6 +418,7 @@ def apply_lsk_gps(decks: list[dict], lsk: list[dict]) -> list[dict]:
             d["from_node"] = hit.get("from_node")
             d["identity"] = hit["from_bang"]
             d["short"] = hit.get("short")
+            d["bang_mask"] = hit.get("bang_mask")
         d["gadget"] = "Lilyshark T-Deck"
 
     for row in lsk:
@@ -433,6 +435,7 @@ def apply_lsk_gps(decks: list[dict], lsk: list[dict]) -> list[dict]:
             "lon": row.get("lon"),
             "tx_frames": 0,
             "short": row.get("short"),
+            "bang_mask": row.get("bang_mask"),
             "gadget": "Lilyshark T-Deck",
             "ble_name": None,
             "position_via": row.get("position_via"),

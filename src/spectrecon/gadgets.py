@@ -120,13 +120,14 @@ CATALOG: tuple[Fingerprint, ...] = (
     ),
     Fingerprint(
         # LilyGO T-Deck running lilyshark.com firmware. Advertises the
-        # Meshtastic GATT service so the official app can pair, but the
-        # local name is "Lilyshark <short>" (tdeck_ble.cpp / sim_main.cpp).
-        # Must sit above the generic Meshtastic fingerprint.
+        # Meshtastic GATT service so the official app can pair; the local
+        # name is "Lilyshark <short>" (tdeck_ble.cpp / sim_main.cpp).
+        # Must sit above the generic Meshtastic fingerprint. The LSK
+        # analyzer GATT UUID is not advertised on current T-Deck firmware
+        # — do not use it as detection.
         id="lilyshark-tdeck", label="Lilyshark T-Deck", family="rig",
         ssid=(r"^lilyshark",),
         name=(r"^lilyshark",),
-        uuids=("6C736B00-9C1D-4B7A-B3F2-1D0E5A7C4E10",),  # LSK analyzer GATT
         auth=(r"\[RIG:lilyshark",),
     ),
     Fingerprint(
@@ -242,7 +243,7 @@ def apply(devices: list[dict]) -> None:
         parsed = parse_lilyshark_name(d.get("ssid") or d.get("name"))
         if parsed and parsed.get("short"):
             d["lilyshark_short"] = parsed["short"]
-            d["from_bang"] = parsed.get("from_bang")
+            d["bang_mask"] = parsed.get("bang_mask")
             if hit is None:
                 d["gadget"] = "Lilyshark T-Deck"
                 d["gadget_id"] = "lilyshark-tdeck"

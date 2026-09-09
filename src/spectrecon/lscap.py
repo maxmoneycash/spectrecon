@@ -16,10 +16,12 @@ stays opaque. MeshCore advertisement bodies are public broadcasts (key,
 optional GPS, name) — not contact expansion, not payload decrypt.
 
 Joins beyond the radio header: TX frames identify the capturing T-Deck;
-BLE name `Lilyshark XXXX` is `node_num & 0xffff`; Field GPS fills in when
-the payload has no Position; USB `LSK T` supplies the deck's own GPS when
-Field is not next to the radio; witness keys (or payload SHA-256)
-corroborate the same over-the-air frame across two captures.
+BLE name `Lilyshark XXXX` is only `node_num & 0xffff` (`!****XXXX`) — never
+a full node id; Field GPS fills in when the payload has no Position; USB
+`LSK T` supplies the deck's own GPS when Field is not next to the radio;
+witness keys (or payload SHA-256) corroborate the same over-the-air frame
+across two captures. `0x4C534B01` is the simulator/fallback in a radio
+header, not something a BLE short invents.
 """
 
 from __future__ import annotations
@@ -144,12 +146,27 @@ def band_for_hz(freq_hz: int | None) -> str | None:
     return None
 
 
+def bang_mask(short: str | None) -> str | None:
+    """Field's LoRa label for a BLE short: `!****4B01`. Not a node number."""
+    if not short:
+        return None
+    text = str(short).strip().upper()
+    if len(text) != 4:
+        return None
+    try:
+        int(text, 16)
+    except ValueError:
+        return None
+    return f"!****{text}"
+
+
 def parse_lilyshark_name(name: str | None) -> dict | None:
     """Parse firmware BLE / mesh names: `Lilyshark 4B01` or `Lilyshark-4B01`.
 
     Returns None when the string is not a Lilyshark identity. `short` is the
-    4-hex node-number suffix (`localMeshtasticNodeNum() & 0xffff`); the
-    default firmware node `0x4C534B01` shortens to `4B01`.
+    4-hex suffix (`localMeshtasticNodeNum() & 0xffff`). That is not a full
+    node id — `4B01` does not mean `0x4C534B01`. Full `!xxxxxxxx` values come
+    from a radio header or `LSK ID.node`.
     """
     if not name:
         return None
@@ -158,13 +175,9 @@ def parse_lilyshark_name(name: str | None) -> dict | None:
         return None
     match = _LILYSHARK_SHORT_RE.match(text)
     short = match.group("short").upper() if match else None
-    out: dict = {"name": text, "short": short}
+    out: dict = {"name": text, "short": short, "bang_mask": bang_mask(short)}
     if short:
-        suffix = int(short, 16)
-        out["suffix_int"] = suffix
-        if suffix == (LILYSHARK_NODE_NUM & 0xFFFF):
-            out["from_node"] = LILYSHARK_NODE_NUM
-            out["from_bang"] = f"!{LILYSHARK_NODE_NUM:08x}"
+        out["suffix_int"] = int(short, 16)
     return out
 
 
@@ -1054,6 +1067,7 @@ def heard(con, capture_file: str | None = None) -> list[dict]:
             t["lilyshark_short"] = f"{int(t['from_node']) & 0xFFFF:04X}"
         else:
             t["lilyshark_short"] = None
+        t["bang_mask"] = bang_mask(t.get("lilyshark_short"))
         ble = None
         short = t.get("lilyshark_short")
         if short:
@@ -1181,6 +1195,7 @@ def capturing_decks(con, capture_file: str | None = None) -> list[dict]:
             if d.get("from_node") is not None else None
         )
         d["short"] = short
+        d["bang_mask"] = bang_mask(short)
         d["gadget"] = "Lilyshark T-Deck"
         hit = ble.get(short) if short else None
         if hit:
@@ -1199,9 +1214,10 @@ def capturing_decks(con, capture_file: str | None = None) -> list[dict]:
         decks = [
             {
                 "capture_file": None,
-                "identity": v.get("from_bang"),
-                "from_node": v.get("from_node"),
-                "from_bang": v.get("from_bang"),
+                "identity": None,
+                "from_node": None,
+                "from_bang": None,
+                "bang_mask": v.get("bang_mask") or bang_mask(short),
                 "lat": v.get("lat"),
                 "lon": v.get("lon"),
                 "tx_frames": 0,
@@ -1300,8 +1316,7 @@ def _ble_lilyshark_positions(con) -> dict[str, dict]:
                 "lat": row.get("lat"),
                 "lon": row.get("lon"),
                 "bssid": row.get("bssid"),
-                "from_node": parsed.get("from_node"),
-                "from_bang": parsed.get("from_bang"),
+                "bang_mask": parsed.get("bang_mask"),
             }
     return out
 

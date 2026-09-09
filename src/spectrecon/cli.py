@@ -803,8 +803,8 @@ def debrief(
               title="RF gadgets / audit rigs / mesh nodes")
     if result.get("capturing_decks"):
         _emit(result["capturing_decks"], False,
-              ["identity", "from_bang", "short", "tx_frames", "ble_name",
-               "position_via", "lat", "lon"],
+              ["identity", "from_bang", "short", "bang_mask", "tx_frames",
+               "ble_name", "position_via", "lat", "lon"],
               title="capturing T-Deck (TX frames + BLE + USB LSK T GPS)")
     if result.get("lora"):
         _emit(result["lora"], False,

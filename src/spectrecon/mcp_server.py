@@ -163,7 +163,7 @@ def identify_rf(ssid: str = "", name: str = "", bssid: str = "",
                "family": hit.family, "via": hit.via}
     if parsed:
         out["lilyshark_short"] = parsed.get("short")
-        out["from_bang"] = parsed.get("from_bang")
+        out["bang_mask"] = parsed.get("bang_mask")
         if hit is None:
             out.update({"id": "lilyshark-tdeck", "label": "Lilyshark T-Deck",
                         "family": "rig", "via": "name"})

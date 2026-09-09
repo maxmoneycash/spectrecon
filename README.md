@@ -166,37 +166,31 @@ For every unique BSSID (at its strongest-RSSI position):
   (`SkyTel Ops` heard 0.5 km from a SkyTel Spectrum LLC site -> attributed)
 - **anomalies**: emitters with no licensed infrastructure within
   `--anomaly-km` (default 2) — rogue/interesting by construction
-- **lora / Lilyshark**: `.lscap` frames from a T-Deck. The unencrypted
-  Meshtastic radio header gives `from` node IDs (`!xxxxxxxx`); those join
-  `mesh.nodes` when a map dump is loaded. Firmware identity `!4c534b01`
-  (and names starting `Lilyshark`) tags a Lilyshark T-Deck. Four more
-  joins sit on top of that:
-  - **TX vs RX**: direction 2 frames are the capturing deck's own
-    transmissions, not something it heard. `debrief` lists the capturing
-    T-Deck separately and counts direct (zero-hop) vs relayed receptions.
-  - **BLE short name → node suffix**: firmware advertises `Lilyshark 4B01`
-    (`node_num & 0xffff`). A Field BLE sighting of that name shares GPS
-    with LoRa `!xxxx4b01`.
-  - **LSK GPS**: when the payload has no Position, the capturing deck's
-    location comes from USB `LSK T` (the deck's own GPS, only when the
-    firmware has a fix), else Field BLE GPS (phone next to the radio).
-    `LSK ID.node` is the flashed identity (MAC-derived); it is never
-    filled in as `!4c534b01`. Import a saved analyzer-link log or
-    `spectrecon listen` on the CDC port.
-  - **Witness keys**: SHA-256 of payload + 25 kHz-rounded frequency +
-    60 s time bucket (Lilyshark Field Receipts). Import a `.witness`
-    sidecar or pass `--epoch` (unix seconds of tick 0). Two captures that
-    share a key heard the same over-the-air frame. Without a wall clock,
-    identical payload hashes still corroborate.
+- **lora / Lilyshark**: each source answers a different question. Mixing
+  them was how a BLE name `Lilyshark 4B01` used to be treated as node
+  `!4c534b01` (the simulator fallback). It is not.
 
-  Simulator frames, invalid CRC, MQTT-injected (`via_mqtt`), and
-  net-relayed (USB `LSK INJ`) copies stay in `lscap.frames` but do not
-  count as heard. RSSI/SNR are only a received measurement on RX frames
-  whose `present_fields` bits are set — TX records are not 0 dBm.
+  | Source | Identity | Position | Traffic |
+  | --- | --- | --- | --- |
+  | `.lscap` radio header | full `!xxxxxxxx` | payload Position (default PSK only) | RX, after hygiene |
+  | `.lscap` direction=2 | capturing deck | same | own TX, not heard |
+  | Field BLE `Lilyshark XXXX` | low 16 bits only (`!****XXXX`) | phone GPS | none |
+  | USB `LSK ID` + `LSK T` | `LSK ID.node` (MAC-derived) | deck GPS, only with a fix | `LSK F` hex if present |
+  | `.witness` / `--epoch` | n/a | n/a | same-OTA corroboration |
+  | `mesh.nodes` | map dump | last known | n/a |
+
+  Position order for the capturing deck: payload → USB `LSK T` → Field BLE.
+  `0x4C534B01` is a radio-header value (simulator/fallback), never filled
+  in from a 4-hex BLE short or a missing `LSK ID.node`. Simulator frames,
+  invalid CRC, MQTT-injected (`via_mqtt`), and net-relayed (USB `LSK INJ`)
+  copies stay in `lscap.frames` but do not count as heard. RSSI/SNR are
+  only a received measurement on RX frames whose `present_fields` bits
+  are set — TX records are not 0 dBm.
 
 - **gadgets**: Flipper Zero, Hak5 Pineapple, ESP32 Marauder, Pwnagotchi,
   Deauther, Biscuit, **Lilyshark T-Deck** (`Lilyshark <short>` over the
-  Meshtastic BLE service), Meshtastic/MeshCore/RNode, and chip OUIs
+  Meshtastic BLE service — not the unimplemented LSK GATT UUID),
+  Meshtastic/MeshCore/RNode, and chip OUIs
   (Espressif, Raspberry Pi, Alfa) tagged from SSID, BLE name, service UUID,
   or OUI.
   Identification only — `spectrecon gadgets` lists the catalog.

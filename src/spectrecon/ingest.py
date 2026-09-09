@@ -469,4 +469,25 @@ def to_geojson(debrief_result: dict) -> dict:
             "capturing_deck": node.get("capturing_deck"),
             "witnesses": node.get("witnesses"),
         }))
+    plotted = {
+        n.get("identity") or n.get("from_bang") or n.get("lilyshark_short")
+        for n in debrief_result.get("lora") or []
+        if n.get("capturing_deck") and n.get("lat") is not None
+    }
+    for deck in debrief_result.get("capturing_decks") or []:
+        if deck.get("lat") is None or deck.get("lon") is None:
+            continue
+        ident = deck.get("identity") or deck.get("from_bang") or deck.get("short")
+        if ident in plotted:
+            continue
+        features.append(point(deck, {
+            "kind": "capturing-deck",
+            "identity": deck.get("identity"),
+            "from_bang": deck.get("from_bang"),
+            "bang_mask": deck.get("bang_mask"),
+            "short": deck.get("short"),
+            "gadget": deck.get("gadget"),
+            "position_via": deck.get("position_via"),
+            "capturing_deck": True,
+        }))
     return {"type": "FeatureCollection", "features": features}

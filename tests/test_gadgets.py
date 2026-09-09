@@ -32,7 +32,7 @@ def test_lilyshark_tdeck_beats_meshtastic_uuid():
     )
     assert hit is not None and hit.id == "lilyshark-tdeck"
     lsk = identify(service_uuids=["6c736b00-9c1d-4b7a-b3f2-1d0e5a7c4e10"])
-    assert lsk is not None and lsk.id == "lilyshark-tdeck"
+    assert lsk is None  # LSK GATT is unimplemented on current T-Deck firmware
     stock = identify(name="Meshtastic_ab12")
     assert stock is not None and stock.id == "meshtastic"
 
@@ -68,4 +68,5 @@ def test_apply_lilyshark_short_name():
     apply(devices)
     assert devices[0]["gadget_id"] == "lilyshark-tdeck"
     assert devices[0]["lilyshark_short"] == "4B01"
-    assert devices[0]["from_bang"] == "!4c534b01"
+    assert devices[0]["bang_mask"] == "!****4B01"
+    assert devices[0].get("from_bang") is None

@@ -17,6 +17,19 @@ def _base_map(points: list[tuple[float, float]]):
     return folium.Map(location=[lat, lon], zoom_start=12, tiles="OpenStreetMap")
 
 
+def _located(rows: list[dict]) -> list[dict]:
+    return [r for r in rows
+            if r.get("lat") is not None and r.get("lon") is not None]
+
+
+def _deck_key(row: dict) -> tuple:
+    return (
+        round(float(row["lat"]), 6),
+        round(float(row["lon"]), 6),
+        row.get("identity") or row.get("from_bang") or row.get("short"),
+    )
+
+
 def debrief_map(result: dict, out: Path) -> None:
     """Devices colored by flag: red=anomaly, green=attributed, blue=other."""
     import folium
@@ -24,11 +37,18 @@ def debrief_map(result: dict, out: Path) -> None:
     anomaly_bssids = {a["bssid"] for a in result["anomalies"]}
     attributed = {a["bssid"]: a for a in result["attributions"]}
     devices = result["devices"]
-    lora = [n for n in result.get("lora") or []
-            if n.get("lat") is not None and n.get("lon") is not None]
+    lora = _located(result.get("lora") or [])
+    extra_decks = []
+    seen = {_deck_key(n) for n in lora if n.get("capturing_deck")}
+    for deck in _located(result.get("capturing_decks") or []):
+        key = _deck_key(deck)
+        if key not in seen:
+            extra_decks.append(deck)
+            seen.add(key)
     m = _base_map(
         [(d["lat"], d["lon"]) for d in devices]
         + [(n["lat"], n["lon"]) for n in lora]
+        + [(d["lat"], d["lon"]) for d in extra_decks]
     )
     for d in devices:
         bssid = d["bssid"]
@@ -77,6 +97,24 @@ def debrief_map(result: dict, out: Path) -> None:
         folium.CircleMarker(
             location=[node["lat"], node["lon"]], radius=8,
             color=color, fill=True, fill_opacity=0.85,
+            popup=folium.Popup("<br>".join(lines), max_width=300),
+        ).add_to(m)
+    for deck in extra_decks:
+        lines = [
+            f"<b>{deck.get('identity') or deck.get('bang_mask') or 'T-Deck'}</b>",
+            "capturing T-Deck",
+        ]
+        if deck.get("short"):
+            lines.append(f"BLE short {deck['short']}")
+        if deck.get("ble_name"):
+            lines.append(f"BLE {deck['ble_name']}")
+        if deck.get("position_via"):
+            lines.append(f"via {deck['position_via']}")
+        if deck.get("fw"):
+            lines.append(f"fw {deck['fw']}")
+        folium.CircleMarker(
+            location=[deck["lat"], deck["lon"]], radius=9,
+            color="black", fill=True, fill_opacity=0.9,
             popup=folium.Popup("<br>".join(lines), max_width=300),
         ).add_to(m)
     m.save(str(out))
