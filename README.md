@@ -45,7 +45,9 @@ DesertRose Repeater -> ANOMALY: no licensed infrastructure within 2 km
 ```
 
 There's also an MCP server (`spectrecon mcp`) that exposes every pivot as
-agent tools over stdio.
+agent tools over stdio, and **Spectrecon Field** (`../spectrecon-field`) — an
+iPhone wardriving companion that records GPS + BLE and exports WiGLE CSV for
+`import` / `debrief`.
 
 ## Usage
 
