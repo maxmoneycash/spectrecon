@@ -89,14 +89,23 @@ def parse_wigle_csv(path: Path) -> list[dict]:
 def import_capture(db_path: Path, csv_path: Path, epoch: int | None = None) -> int:
     """Load a wardriving capture into capture.observations.
 
-    Dispatches on file type: .kismet (Kismet SQLite log), WiGLE CSV, or
-    Lilyshark .lscap. `epoch` is the unix-seconds GPS wall-clock of .lscap
-    tick 0 (Field Receipts witness keys); a `.witness` sidecar supplies it
-    when present.
+    Dispatches on file type: .kismet (Kismet SQLite log), WiGLE CSV,
+    Lilyshark .lscap, or USB analyzer-link log (`LSK T` / `LSK F`).
+    `epoch` is the unix-seconds GPS wall-clock of .lscap tick 0 (Field
+    Receipts witness keys); a `.witness` sidecar supplies it when present.
+    LSK logs do not use `--epoch` — live USB stamps the host clock, undated
+    files leave unix time unset.
     """
     if csv_path.suffix.lower() == ".lscap":
         from . import lscap as lscap_mod
         return lscap_mod.load_lscap(db_path, csv_path, epoch=epoch)
+    from . import lsk as lsk_mod
+    if lsk_mod.is_serial_port(csv_path):
+        raise ValueError(
+            f"{csv_path} is a serial device — use `spectrecon listen {csv_path}`"
+        )
+    if lsk_mod.is_lsk_log(csv_path):
+        return lsk_mod.load_lsk(db_path, csv_path)
     if csv_path.suffix.lower() == ".kismet":
         rows = parse_kismet(csv_path)
     else:

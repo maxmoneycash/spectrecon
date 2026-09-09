@@ -17,8 +17,9 @@ optional GPS, name) — not contact expansion, not payload decrypt.
 
 Joins beyond the radio header: TX frames identify the capturing T-Deck;
 BLE name `Lilyshark XXXX` is `node_num & 0xffff`; Field GPS fills in when
-the payload has no Position; witness keys (or payload SHA-256) corroborate
-the same over-the-air frame across two captures.
+the payload has no Position; USB `LSK T` supplies the deck's own GPS when
+Field is not next to the radio; witness keys (or payload SHA-256)
+corroborate the same over-the-air frame across two captures.
 """
 
 from __future__ import annotations
@@ -845,8 +846,6 @@ def load_lscap(db_path: Path, path: Path, epoch: int | None = None) -> int:
     omitted, a `<capture>.witness` sidecar next to the file supplies it and
     any firmware-derived witness keys.
     """
-    import duckdb
-
     sidecar = None
     for candidate in sidecar_paths(path):
         if candidate.exists():
@@ -857,23 +856,44 @@ def load_lscap(db_path: Path, path: Path, epoch: int | None = None) -> int:
         epoch = sidecar["epoch"]
     keys_by_seq = sidecar["keys"] if sidecar else {}
     ticks = _file_ticks_per_second(path)
+    return write_frames(
+        db_path, path.name, iter_frames(path),
+        epoch=epoch, ticks=ticks, keys_by_seq=keys_by_seq,
+    )
 
-    frames = iter_frames(path)
+
+def write_frames(
+    db_path: Path,
+    capture_file: str,
+    frames: list[dict],
+    epoch: int | None = None,
+    ticks: int = 1_000_000,
+    keys_by_seq: dict[int, str] | None = None,
+) -> int:
+    """Insert classified frames. Replaces any previous rows for this file.
+
+    Per-frame `unix_seconds` (live USB host clock) wins over tick+epoch.
+    Undated logs leave unix_seconds NULL — do not guess.
+    """
+    import duckdb
+
+    keys_by_seq = keys_by_seq or {}
     rows = []
     for f in frames:
         info = classify_frame(f)
         payload_sha = hashlib.sha256(f["payload"]).hexdigest() if f["payload"] else None
-        unix = None
-        if epoch is not None:
-            unix = epoch + int(f["timestamp_us"]) // ticks
-        reason = frame_ineligibility(f, has_wall_clock=epoch is not None)
+        unix = f.get("unix_seconds")
+        if unix is None and epoch is not None:
+            unix = epoch + int(f.get("timestamp_us") or 0) // ticks
+        has_clock = unix is not None
+        reason = frame_ineligibility(f, has_wall_clock=has_clock)
         wkey = keys_by_seq.get(int(f["sequence"]))
         if wkey:
             reason = None
         elif reason is None and unix is not None:
             wkey = witness_key(f["payload"], int(f["freq_hz"]), unix).hex()
         rows.append((
-            path.name, f["index"], f["sequence"], f["timestamp_us"],
+            capture_file, f["index"], f["sequence"], f["timestamp_us"],
             f["freq_hz"], f["bandwidth_hz"], f["rssi_dbm"], f["snr_db"],
             f["spreading_factor"], f["crc_state"], f["synthetic"],
             f["profile_id"], info["protocol"],
@@ -899,9 +919,13 @@ def load_lscap(db_path: Path, path: Path, epoch: int | None = None) -> int:
         if existing and not _REQUIRED_COLS <= have:
             con.execute("DROP TABLE lscap.frames")
         con.execute(FRAMES_DDL)
-        con.execute("DELETE FROM lscap.frames WHERE capture_file = ?", [path.name])
-        placeholders = ",".join(["?"] * _FRAME_COLS)
-        con.executemany(f"INSERT INTO lscap.frames VALUES ({placeholders})", rows)
+        con.execute("DELETE FROM lscap.frames WHERE capture_file = ?",
+                    [capture_file])
+        if rows:
+            placeholders = ",".join(["?"] * _FRAME_COLS)
+            con.executemany(
+                f"INSERT INTO lscap.frames VALUES ({placeholders})", rows
+            )
     finally:
         con.close()
     return len(rows)
@@ -911,8 +935,8 @@ def heard(con, capture_file: str | None = None) -> list[dict]:
     """Unique LoRa identities in imported .lscap, joined to mesh + licenses.
 
     Also joins Field BLE `Lilyshark XXXX` names (node-number suffix), the
-    capturing deck's TX frames, and witness/payload corroboration across
-    captures.
+    capturing deck's TX frames, USB `LSK T` GPS, and witness/payload
+    corroboration across captures.
     """
     from .queries import _has_table, _haversine_expr, _rows
 
@@ -1001,6 +1025,11 @@ def heard(con, capture_file: str | None = None) -> list[dict]:
     decks = capturing_decks(con, capture_file)
     deck_ids = {d["identity"] for d in decks if d.get("identity")}
     deck_shorts = {d["short"] for d in decks if d.get("short")}
+    lsk_by_bang = {d["from_bang"]: d for d in decks
+                   if d.get("from_bang") and d.get("position_via") == "lsk-t"}
+    lsk_by_short = {d["short"]: d for d in decks
+                    if d.get("short") and d.get("lat") is not None
+                    and d.get("position_via") == "lsk-t"}
     sensor = next((d for d in decks if d.get("lat") is not None), None)
     witnesses = _witness_counts(con)
 
@@ -1036,8 +1065,22 @@ def heard(con, capture_file: str | None = None) -> list[dict]:
             t["ble_lon"] = ble["lon"]
         else:
             t["ble_name"] = t["ble_rssi"] = t["ble_lat"] = t["ble_lon"] = None
+        t["capturing_deck"] = (
+            t.get("identity") in deck_ids
+            or t.get("self_tx")
+            or (short and short.upper() in deck_shorts)
+        )
+        lsk = None
+        if t.get("identity"):
+            lsk = lsk_by_bang.get(t["identity"])
+        if lsk is None and short:
+            lsk = lsk_by_short.get(short.upper())
         if t.get("lat") is not None:
             t["position_via"] = "payload"
+        elif t["capturing_deck"] and lsk and lsk.get("lat") is not None:
+            t["lat"] = lsk["lat"]
+            t["lon"] = lsk["lon"]
+            t["position_via"] = "lsk-t"
         elif match:
             t["lat"] = match.get("lat")
             t["lon"] = match.get("lon")
@@ -1048,11 +1091,6 @@ def heard(con, capture_file: str | None = None) -> list[dict]:
             t["position_via"] = "field-ble"
         else:
             t["position_via"] = None
-        t["capturing_deck"] = (
-            t.get("identity") in deck_ids
-            or t.get("self_tx")
-            or (short and short.upper() in deck_shorts)
-        )
         if t["capturing_deck"] or t.get("lilyshark_deck") or (
             parsed is not None
         ) or (t.get("long_name") or t.get("mesh_name") or "").lower().startswith(
@@ -1110,29 +1148,32 @@ def heard(con, capture_file: str | None = None) -> list[dict]:
 
 
 def capturing_decks(con, capture_file: str | None = None) -> list[dict]:
-    """The T-Deck that wrote each .lscap: its own TX frames, plus BLE name."""
+    """The T-Deck that wrote each capture: TX frames, BLE name, USB LSK T."""
     from .queries import _has_table, _rows
+    from .lsk import apply_lsk_gps, lsk_decks
 
-    if not _has_table(con, "lscap", "frames"):
-        return []
-    if not _column_in(con, "lscap", "frames", "direction"):
-        return []
-    where = "WHERE direction = 2 AND identity IS NOT NULL"
-    params: list = []
-    if capture_file:
-        where += " AND capture_file = ?"
-        params.append(capture_file)
-    decks = _rows(con, f"""
-        SELECT capture_file,
-               identity,
-               any_value(from_node) AS from_node,
-               any_value(from_bang) AS from_bang,
-               arg_max(lat, CASE WHEN lat IS NOT NULL THEN 1 ELSE 0 END) AS lat,
-               arg_max(lon, CASE WHEN lon IS NOT NULL THEN 1 ELSE 0 END) AS lon,
-               count(*) AS tx_frames
-        FROM lscap.frames {where}
-        GROUP BY capture_file, identity
-    """, params)
+    decks: list[dict] = []
+    if _has_table(con, "lscap", "frames") and _column_in(
+        con, "lscap", "frames", "direction"
+    ):
+        where = "WHERE direction = 2 AND identity IS NOT NULL"
+        params: list = []
+        if capture_file:
+            where += " AND capture_file = ?"
+            params.append(capture_file)
+        decks = _rows(con, f"""
+            SELECT capture_file,
+                   identity,
+                   any_value(from_node) AS from_node,
+                   any_value(from_bang) AS from_bang,
+                   arg_max(lat, CASE WHEN lat IS NOT NULL THEN 1 ELSE 0 END)
+                       AS lat,
+                   arg_max(lon, CASE WHEN lon IS NOT NULL THEN 1 ELSE 0 END)
+                       AS lon,
+                   count(*) AS tx_frames
+            FROM lscap.frames {where}
+            GROUP BY capture_file, identity
+        """, params)
     ble = _ble_lilyshark_positions(con)
     for d in decks:
         short = (
@@ -1153,25 +1194,25 @@ def capturing_decks(con, capture_file: str | None = None) -> list[dict]:
         else:
             d["ble_name"] = None
             d["position_via"] = "payload" if d.get("lat") is not None else None
-    if decks:
-        return decks
-    # No TX frames: still join BLE `Lilyshark XXXX` as the nearby deck.
-    return [
-        {
-            "capture_file": None,
-            "identity": v.get("from_bang"),
-            "from_node": v.get("from_node"),
-            "from_bang": v.get("from_bang"),
-            "lat": v.get("lat"),
-            "lon": v.get("lon"),
-            "tx_frames": 0,
-            "short": short,
-            "gadget": "Lilyshark T-Deck",
-            "ble_name": v["name"],
-            "position_via": "field-ble",
-        }
-        for short, v in ble.items()
-    ]
+    if not decks:
+        # No TX frames: still join BLE `Lilyshark XXXX` as the nearby deck.
+        decks = [
+            {
+                "capture_file": None,
+                "identity": v.get("from_bang"),
+                "from_node": v.get("from_node"),
+                "from_bang": v.get("from_bang"),
+                "lat": v.get("lat"),
+                "lon": v.get("lon"),
+                "tx_frames": 0,
+                "short": short,
+                "gadget": "Lilyshark T-Deck",
+                "ble_name": v["name"],
+                "position_via": "field-ble",
+            }
+            for short, v in ble.items()
+        ]
+    return apply_lsk_gps(decks, lsk_decks(con))
 
 
 def corroborate(con) -> list[dict]:

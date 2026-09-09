@@ -224,6 +224,185 @@ def test_on_air_excludes_synthetic_crc_mqtt_relay(tmp_path):
     assert bangs == {"!11111111"}
 
 
+def test_lsk_t_gps_joins_without_field(tmp_path):
+    """USB LSK T positions the capturing deck when Field is not present."""
+    from spectrecon import ingest as ingest_mod
+    from spectrecon import lsk as lsk_mod
+
+    node = 0x96F61B44  # MAC-derived; not the simulator fallback
+    cap = tmp_path / "deck.lscap"
+    _write_lscap(cap, _meshtastic_frame(node), direction=2)
+    log = tmp_path / "deck.lsk"
+    log.write_text(
+        'LSK ID {"app":"lilyshark","fw":"0.4.2","board":"t-deck",'
+        '"node":"!96f61b44"}\n'
+        'LSK T {"bat":"BAT 84%","gps":"GPS 9","profile":"MESHTASTIC US LF",'
+        '"frames":41,"rssi_x10":-912,"snr_x10":63,"sim":false,'
+        '"lat":37.911,"lon":-122.018,"sat":9,"freq_hz":906875000,'
+        '"sf":11,"bw_hz":250000,"rx":128,"crc":3}\n'
+        'LSK T {"bat":"BAT 84%","gps":"NOFIX","profile":"MESHTASTIC US LF",'
+        '"frames":41,"rssi_x10":-912,"snr_x10":63,"sim":false,'
+        '"sat":0,"freq_hz":906875000,"sf":11,"bw_hz":250000,"rx":128,"crc":3}\n'
+    )
+    db = tmp_path / "t.db"
+    ingest_mod.import_capture(db, cap)
+    n = ingest_mod.import_capture(db, log)
+    assert n >= 1
+    result = ingest_mod.debrief(db)
+    deck = result["capturing_decks"][0]
+    assert deck["from_bang"] == "!96f61b44"
+    assert deck["short"] == "1B44"
+    assert deck["position_via"] == "lsk-t"
+    assert abs(deck["lat"] - 37.911) < 1e-6
+    assert abs(deck["lon"] - (-122.018)) < 1e-6
+    node_row = result["lora"][0]
+    assert node_row["capturing_deck"] is True
+    assert node_row["position_via"] == "lsk-t"
+    assert abs(node_row["sensor_lat"] - 37.911) < 1e-6
+    parsed = lsk_mod.parse_lsk_lines(log.read_text().splitlines())
+    assert parsed["identity"]["from_node"] == node
+    assert parsed["telemetry"][1]["lat"] is None  # NOFIX line has no lat/lon
+    assert parsed["telemetry"][0]["unix_seconds"] is None  # undated log
+
+
+def test_lsk_id_omitted_node_is_not_simulator_fallback(tmp_path):
+    from spectrecon import lsk as lsk_mod
+
+    session = lsk_mod.parse_lsk_lines([
+        'LSK ID {"app":"lilyshark","fw":"0.1.0","board":"t-deck"}\n',
+        'LSK T {"gps":"GPS 4","sim":false,"lat":35.0,"lon":-80.0,"sat":4}\n',
+    ])
+    assert session["identity"].get("from_bang") is None
+    assert session["identity"].get("from_node") is None
+    db = tmp_path / "t.db"
+    n = lsk_mod.write_session(db, "usb.log", session)
+    assert n == 1
+    con = duckdb.connect(str(db), read_only=True)
+    decks = lscap.capturing_decks(con)
+    con.close()
+    assert decks[0]["from_bang"] is None
+    assert decks[0]["position_via"] == "lsk-t"
+    assert decks[0]["lat"] == 35.0
+
+
+def test_lsk_t_beats_field_ble_but_not_payload(tmp_path):
+    from spectrecon import ingest as ingest_mod
+    from spectrecon import lsk as lsk_mod
+
+    node = 0x96F61B44
+    csv = tmp_path / "field.csv"
+    csv.write_text(
+        "WigleWifi-1.4,appRelease=test,model=iPhone,release=1,"
+        "device=test,display=x,board=x,brand=Apple\n"
+        "MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,"
+        "CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type\n"
+        "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE,Lilyshark 1B44,[RIG:lilyshark],"
+        "2026-09-01 10:01:00,0,-55,35.1,-80.2,100,8,BLE\n"
+    )
+    db = tmp_path / "t.db"
+    ingest_mod.import_capture(db, csv)
+    cap = tmp_path / "deck.lscap"
+    _write_lscap(cap, _meshtastic_frame(node), direction=2)
+    ingest_mod.import_capture(db, cap)
+    lsk_mod.load_lsk_text(
+        db,
+        'LSK ID {"app":"lilyshark","fw":"x","board":"t-deck","node":"!96f61b44"}\n'
+        'LSK T {"gps":"GPS 9","sim":false,"lat":37.911,"lon":-122.018,"sat":9}\n',
+        "usb.lsk",
+    )
+    result = ingest_mod.debrief(db)
+    deck = result["capturing_decks"][0]
+    assert deck["position_via"] == "lsk-t"
+    assert abs(deck["lat"] - 37.911) < 1e-6
+    assert deck["ble_name"] == "Lilyshark 1B44"
+
+
+def test_lsk_gps_does_not_override_payload_position():
+    from spectrecon import lsk as lsk_mod
+
+    decks = [{
+        "identity": "!96f61b44", "from_bang": "!96f61b44", "short": "1B44",
+        "lat": 10.0, "lon": 20.0, "position_via": "payload", "tx_frames": 1,
+    }]
+    lsk = [{
+        "from_bang": "!96f61b44", "short": "1B44",
+        "lat": 37.9, "lon": -122.0, "position_via": "lsk-t",
+    }]
+    out = lsk_mod.apply_lsk_gps(decks, lsk)
+    assert out[0]["lat"] == 10.0
+    assert out[0]["position_via"] == "payload"
+
+
+def test_is_lsk_log(tmp_path):
+    from spectrecon import lsk as lsk_mod
+
+    log = tmp_path / "session.txt"
+    log.write_text('LSK ID {"app":"lilyshark","fw":"x","board":"t-deck"}\n')
+    csv = tmp_path / "drive.csv"
+    csv.write_text("WigleWifi-1.4\nMAC,SSID\n")
+    named = tmp_path / "deck.lsk"
+    named.write_text("")
+    assert lsk_mod.is_lsk_log(log) is True
+    assert lsk_mod.is_lsk_log(csv) is False
+    assert lsk_mod.is_lsk_log(named) is True
+    assert lsk_mod.parse_lsk_node(None) is None
+    assert lsk_mod.parse_lsk_node("!96f61b44")["short"] == "1B44"
+
+
+def test_lsk_f_hex_loads_as_heard_without_text(tmp_path):
+    import json
+
+    from spectrecon import ingest as ingest_mod
+    from spectrecon import lsk as lsk_mod
+
+    payload = _meshtastic_frame(0x1234ABCD)
+    body = {
+        "src": 0x1234ABCD,
+        "dst": 0xFFFFFFFF,
+        "proto": "Meshtastic",
+        "port": 1,
+        "hops": 0,
+        "rssi_x10": -912,
+        "snr_x10": 63,
+        "kind": "TEXT",
+        "sim": False,
+        "text": "secret default-key chatter",
+        "seq": 7,
+        "ts": 1_000_000,
+        "pf": 0x5FFF,
+        "freq": 906_875_000,
+        "bw": 250_000,
+        "prof": 1,
+        "sf": 11,
+        "dir": 1,
+        "crc": 2,
+        "mflags": 0,
+        "olen": len(payload),
+        "hex": payload.hex(),
+    }
+    db = tmp_path / "t.db"
+    n = lsk_mod.load_lsk_text(
+        db,
+        'LSK ID {"app":"lilyshark","fw":"x","board":"t-deck","node":"!96f61b44"}\n'
+        f"LSK F {json.dumps(body)}\n",
+        "live.lsk",
+        host_clock=True,
+    )
+    assert n >= 1
+    result = ingest_mod.debrief(db)
+    heard = result["lora"]
+    assert heard[0]["from_bang"] == "!1234abcd"
+    assert heard[0]["role"] == "rx"
+    assert abs(heard[0]["rssi_min"] - (-91.2)) < 1e-6
+    con = duckdb.connect(str(db), read_only=True)
+    row = con.execute(
+        "SELECT long_name, unix_seconds FROM lscap.frames"
+    ).fetchone()
+    con.close()
+    assert row[0] is None  # text discarded; no NodeInfo names
+    assert row[1] is not None  # live host clock
+
+
 def test_rssi_absent_when_present_bit_clear(tmp_path):
     cap = tmp_path / "deck.lscap"
     _write_lscap(cap, _meshtastic_frame(0x1234ABCD), present=0x0003)

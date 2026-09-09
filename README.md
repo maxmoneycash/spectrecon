@@ -150,6 +150,8 @@ uv run spectrecon download oui        # one-time: IEEE vendor registry
 uv run spectrecon import WIGLE005.CSV # WiGLE CSV...
 uv run spectrecon import rig.kismet   # ...or Kismet SQLite logs
 uv run spectrecon import capture.lscap # Lilyshark T-Deck LoRa capture
+uv run spectrecon import deck.lsk      # USB analyzer-link log (LSK T GPS)
+uv run spectrecon listen /dev/cu.usbmodem1101 -s 30  # live USB, needs pyserial
 uv run spectrecon debrief
 uv run spectrecon debrief --html drive.html      # Leaflet map to screenshot
 uv run spectrecon debrief --geojson drive.geojson # or Earth/QGIS
@@ -175,9 +177,12 @@ For every unique BSSID (at its strongest-RSSI position):
   - **BLE short name → node suffix**: firmware advertises `Lilyshark 4B01`
     (`node_num & 0xffff`). A Field BLE sighting of that name shares GPS
     with LoRa `!xxxx4b01`.
-  - **LSK GPS**: when the payload has no Position, the deck's location
-    comes from Field BLE GPS (phone next to the deck) or from the deck's
-    own TX Position frames.
+  - **LSK GPS**: when the payload has no Position, the capturing deck's
+    location comes from USB `LSK T` (the deck's own GPS, only when the
+    firmware has a fix), else Field BLE GPS (phone next to the radio).
+    `LSK ID.node` is the flashed identity (MAC-derived); it is never
+    filled in as `!4c534b01`. Import a saved analyzer-link log or
+    `spectrecon listen` on the CDC port.
   - **Witness keys**: SHA-256 of payload + 25 kHz-rounded frequency +
     60 s time bucket (Lilyshark Field Receipts). Import a `.witness`
     sidecar or pass `--epoch` (unix seconds of tick 0). Two captures that

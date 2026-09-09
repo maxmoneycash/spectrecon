@@ -673,23 +673,85 @@ def els_import(
 @app.command("import")
 def import_capture(
     csv_file: Path = typer.Argument(
-        ..., help="WiGLE CSV, Kismet .kismet, or Lilyshark .lscap."),
+        ..., help="WiGLE CSV, Kismet .kismet, Lilyshark .lscap, or LSK USB log."),
     epoch: Optional[int] = typer.Option(
         None, "--epoch",
         help="Unix seconds of .lscap tick 0 (GPS wall-clock for witness keys). "
              "A capture.lscap.witness sidecar supplies this when present."),
     db: Path = typer.Option(DB_PATH, "--db"),
 ) -> None:
-    """Import a capture: WiGLE CSV, Kismet log, or Lilyshark .lscap."""
+    """Import a capture: WiGLE CSV, Kismet log, Lilyshark .lscap, or LSK log."""
+    from . import lsk as lsk_mod
+    if lsk_mod.is_serial_port(csv_file):
+        err.print(f"[red]{csv_file} is a serial device — "
+                  f"use `spectrecon listen {csv_file}`[/red]")
+        raise typer.Exit(1)
     if not csv_file.exists():
         err.print(f"[red]{csv_file} not found[/red]")
         raise typer.Exit(1)
-    n = ingest_mod.import_capture(db, csv_file, epoch=epoch)
+    try:
+        n = ingest_mod.import_capture(db, csv_file, epoch=epoch)
+    except ValueError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
     if n == 0:
         err.print("[yellow]no observations parsed[/yellow]")
         raise typer.Exit(1)
     kind = csv_file.suffix.lower().lstrip(".") or "csv"
+    if lsk_mod.is_lsk_log(csv_file):
+        kind = "lsk"
     console.print(f"[green]{n} {kind} rows imported from {csv_file.name}[/green]")
+
+
+@app.command("listen")
+def listen(
+    port: str = typer.Argument(
+        ..., help="USB CDC port (/dev/cu.usbmodem…) or a saved LSK log."),
+    seconds: Optional[int] = typer.Option(
+        None, "--seconds", "-s",
+        help="Stop after this many seconds. Default: until Ctrl-C."),
+    db: Path = typer.Option(DB_PATH, "--db"),
+) -> None:
+    """Live USB analyzer link: LSK HELLO, then deck GPS (`LSK T`) and frames.
+
+    Firmware streams only after HELLO. `LSK T` lat/lon appear only with a
+    GPS fix — that is the capturing deck's own position, so a .lscap debrief
+    does not need Field sitting next to the radio. Host wall-clock is used
+    only on a live port, never invented for an undated log.
+    """
+    from . import lsk as lsk_mod
+    source = Path(port)
+    if source.exists() and source.is_file():
+        n = lsk_mod.load_lsk(db, source)
+        console.print(f"[green]{n} LSK rows imported from {source.name}[/green]")
+        return
+    if not lsk_mod.is_serial_port(source) and not source.exists():
+        err.print(f"[red]{port} not found[/red]")
+        raise typer.Exit(1)
+    try:
+        text = lsk_mod.listen_serial(port, seconds=seconds)
+    except RuntimeError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except OSError as exc:
+        err.print(f"[red]serial {port}: {exc}[/red]")
+        raise typer.Exit(1)
+    n = lsk_mod.load_lsk_text(db, text, Path(port).name, host_clock=True)
+    if n == 0:
+        err.print("[yellow]no LSK identity, GPS, or frames from the deck[/yellow]")
+        raise typer.Exit(1)
+    parsed = lsk_mod.parse_lsk_lines(text.splitlines(), host_clock=True)
+    ident = parsed.get("identity") or {}
+    gps = next((t for t in reversed(parsed.get("telemetry") or [])
+                if t.get("lat") is not None), None)
+    node = ident.get("from_bang") or ident.get("node") or "?"
+    if gps:
+        console.print(
+            f"[green]{n} LSK rows[/green]  node={node}  "
+            f"gps={gps['lat']:.6f},{gps['lon']:.6f}"
+        )
+    else:
+        console.print(f"[green]{n} LSK rows[/green]  node={node}  gps=none")
 
 
 @app.command()
@@ -743,7 +805,7 @@ def debrief(
         _emit(result["capturing_decks"], False,
               ["identity", "from_bang", "short", "tx_frames", "ble_name",
                "position_via", "lat", "lon"],
-              title="capturing T-Deck (TX frames + BLE Lilyshark XXXX)")
+              title="capturing T-Deck (TX frames + BLE + USB LSK T GPS)")
     if result.get("lora"):
         _emit(result["lora"], False,
               ["identity", "from_bang", "role", "rx_frames", "tx_frames",

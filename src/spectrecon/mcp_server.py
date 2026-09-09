@@ -132,9 +132,9 @@ def mesh_stats() -> str:
 
 @mcp.tool()
 def lora_heard(capture_file: str | None = None) -> str:
-    """Unique LoRa identities in imported Lilyshark .lscap frames, joined to
-    mesh.nodes, Field BLE `Lilyshark XXXX` names, capturing-deck TX, and
-    witness corroboration across captures."""
+    """Unique LoRa identities in imported Lilyshark .lscap / LSK USB frames,
+    joined to mesh.nodes, Field BLE `Lilyshark XXXX` names, capturing-deck
+    TX, USB `LSK T` GPS, and witness corroboration across captures."""
     from . import lscap as lscap_mod
     with queries.connect(DB_PATH) as con:
         return json.dumps({
