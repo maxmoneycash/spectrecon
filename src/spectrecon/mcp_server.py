@@ -132,12 +132,16 @@ def mesh_stats() -> str:
 
 @mcp.tool()
 def lora_heard(capture_file: str | None = None) -> str:
-    """Unique Meshtastic transmitters in imported Lilyshark .lscap frames,
-    joined to mesh.nodes when a map dump is loaded."""
+    """Unique LoRa identities in imported Lilyshark .lscap frames, joined to
+    mesh.nodes, Field BLE `Lilyshark XXXX` names, capturing-deck TX, and
+    witness corroboration across captures."""
     from . import lscap as lscap_mod
     with queries.connect(DB_PATH) as con:
-        return json.dumps(lscap_mod.heard(con, capture_file), default=str,
-                          indent=1)
+        return json.dumps({
+            "heard": lscap_mod.heard(con, capture_file),
+            "capturing_decks": lscap_mod.capturing_decks(con, capture_file),
+            "corroborated": lscap_mod.corroborate(con),
+        }, default=str, indent=1)
 
 
 @mcp.tool()
@@ -149,10 +153,21 @@ def identify_rf(ssid: str = "", name: str = "", bssid: str = "",
     from . import gadgets as gadgets_mod
     hit = gadgets_mod.identify(ssid=ssid, name=name, bssid=bssid,
                                auth_mode=auth_mode)
-    if hit is None:
+    from .lscap import parse_lilyshark_name
+    parsed = parse_lilyshark_name(name or ssid)
+    if hit is None and parsed is None:
         return json.dumps(None)
-    return json.dumps({"id": hit.id, "label": hit.label,
-                       "family": hit.family, "via": hit.via})
+    out = {}
+    if hit:
+        out = {"id": hit.id, "label": hit.label,
+               "family": hit.family, "via": hit.via}
+    if parsed:
+        out["lilyshark_short"] = parsed.get("short")
+        out["from_bang"] = parsed.get("from_bang")
+        if hit is None:
+            out.update({"id": "lilyshark-tdeck", "label": "Lilyshark T-Deck",
+                        "family": "rig", "via": "name"})
+    return json.dumps(out)
 
 
 @mcp.tool()

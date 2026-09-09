@@ -86,15 +86,17 @@ def parse_wigle_csv(path: Path) -> list[dict]:
     return rows
 
 
-def import_capture(db_path: Path, csv_path: Path) -> int:
+def import_capture(db_path: Path, csv_path: Path, epoch: int | None = None) -> int:
     """Load a wardriving capture into capture.observations.
 
-    Dispatches on file type: .kismet (Kismet SQLite log) or WiGLE CSV.
-    Returns rows imported.
+    Dispatches on file type: .kismet (Kismet SQLite log), WiGLE CSV, or
+    Lilyshark .lscap. `epoch` is the unix-seconds GPS wall-clock of .lscap
+    tick 0 (Field Receipts witness keys); a `.witness` sidecar supplies it
+    when present.
     """
     if csv_path.suffix.lower() == ".lscap":
         from . import lscap as lscap_mod
-        return lscap_mod.load_lscap(db_path, csv_path)
+        return lscap_mod.load_lscap(db_path, csv_path, epoch=epoch)
     if csv_path.suffix.lower() == ".kismet":
         rows = parse_kismet(csv_path)
     else:
@@ -248,6 +250,8 @@ def debrief(
                 "anomalies": [],
                 "gadgets": [],
                 "lora": lora,
+                "capturing_decks": lscap_mod.capturing_decks(con, capture_file),
+                "lora_corroborated": lscap_mod.corroborate(con),
             }
         where = "WHERE capture_file = ?" if capture_file else ""
         params = [capture_file] if capture_file else []
@@ -366,6 +370,8 @@ def debrief(
             "anomalies": anomalies,
             "gadgets": gadgets,
             "lora": lora,
+            "capturing_decks": lscap_mod.capturing_decks(con, capture_file),
+            "lora_corroborated": lscap_mod.corroborate(con),
         }
     finally:
         con.close()
@@ -439,4 +445,19 @@ def to_geojson(debrief_result: dict) -> dict:
             props["nearest_tower_km"] = d["nearest_tower_km"]
             props["nearest_tower_owner"] = d["nearest_tower_owner"]
         features.append(point(d, props))
+    for node in debrief_result.get("lora") or []:
+        if node.get("lat") is None or node.get("lon") is None:
+            continue
+        features.append(point(node, {
+            "kind": "lora",
+            "identity": node.get("identity"),
+            "from_bang": node.get("from_bang"),
+            "protocol": node.get("protocol"),
+            "gadget": node.get("gadget"),
+            "role": node.get("role"),
+            "position_via": node.get("position_via"),
+            "lilyshark_short": node.get("lilyshark_short"),
+            "capturing_deck": node.get("capturing_deck"),
+            "witnesses": node.get("witnesses"),
+        }))
     return {"type": "FeatureCollection", "features": features}

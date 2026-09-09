@@ -60,3 +60,12 @@ def test_apply_stamps_device_dict():
     apply(devices)
     assert devices[0]["gadget"] == "Hak5 WiFi Pineapple"
     assert devices[0]["gadget_family"] == "gadget"
+
+
+def test_apply_lilyshark_short_name():
+    devices = [{"bssid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                "ssid": "Lilyshark 4B01", "auth_mode": "[RIG:lilyshark]"}]
+    apply(devices)
+    assert devices[0]["gadget_id"] == "lilyshark-tdeck"
+    assert devices[0]["lilyshark_short"] == "4B01"
+    assert devices[0]["from_bang"] == "!4c534b01"

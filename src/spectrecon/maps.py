@@ -24,7 +24,12 @@ def debrief_map(result: dict, out: Path) -> None:
     anomaly_bssids = {a["bssid"] for a in result["anomalies"]}
     attributed = {a["bssid"]: a for a in result["attributions"]}
     devices = result["devices"]
-    m = _base_map([(d["lat"], d["lon"]) for d in devices])
+    lora = [n for n in result.get("lora") or []
+            if n.get("lat") is not None and n.get("lon") is not None]
+    m = _base_map(
+        [(d["lat"], d["lon"]) for d in devices]
+        + [(n["lat"], n["lon"]) for n in lora]
+    )
     for d in devices:
         bssid = d["bssid"]
         color = ("darkred" if d.get("gadget_family") in ("gadget", "rig")
@@ -47,6 +52,31 @@ def debrief_map(result: dict, out: Path) -> None:
         folium.CircleMarker(
             location=[d["lat"], d["lon"]], radius=7,
             color=color, fill=True, fill_opacity=0.8,
+            popup=folium.Popup("<br>".join(lines), max_width=300),
+        ).add_to(m)
+    for node in lora:
+        if node.get("lat") is None or node.get("lon") is None:
+            continue
+        color = "black" if node.get("capturing_deck") else "purple"
+        lines = [
+            f"<b>{node.get('identity') or node.get('from_bang') or 'lora'}</b>",
+            node.get("protocol") or "lora",
+        ]
+        if node.get("gadget"):
+            lines.append(node["gadget"])
+        if node.get("lilyshark_short"):
+            lines.append(f"BLE short {node['lilyshark_short']}")
+        if node.get("ble_name"):
+            lines.append(f"BLE {node['ble_name']}")
+        if node.get("role"):
+            lines.append(f"role {node['role']}")
+        if node.get("position_via"):
+            lines.append(f"via {node['position_via']}")
+        if node.get("witnesses"):
+            lines.append(f"witnessed by {node['witnesses']} other capture(s)")
+        folium.CircleMarker(
+            location=[node["lat"], node["lon"]], radius=8,
+            color=color, fill=True, fill_opacity=0.85,
             popup=folium.Popup("<br>".join(lines), max_width=300),
         ).add_to(m)
     m.save(str(out))

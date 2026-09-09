@@ -167,7 +167,22 @@ For every unique BSSID (at its strongest-RSSI position):
 - **lora / Lilyshark**: `.lscap` frames from a T-Deck. The unencrypted
   Meshtastic radio header gives `from` node IDs (`!xxxxxxxx`); those join
   `mesh.nodes` when a map dump is loaded. Firmware identity `!4c534b01`
-  (and names starting `Lilyshark`) tags a Lilyshark T-Deck.
+  (and names starting `Lilyshark`) tags a Lilyshark T-Deck. Four more
+  joins sit on top of that:
+  - **TX vs RX**: direction 2 frames are the capturing deck's own
+    transmissions, not something it heard. `debrief` lists the capturing
+    T-Deck separately and counts direct (zero-hop) vs relayed receptions.
+  - **BLE short name → node suffix**: firmware advertises `Lilyshark 4B01`
+    (`node_num & 0xffff`). A Field BLE sighting of that name shares GPS
+    with LoRa `!xxxx4b01`.
+  - **LSK GPS**: when the payload has no Position, the deck's location
+    comes from Field BLE GPS (phone next to the deck) or from the deck's
+    own TX Position frames.
+  - **Witness keys**: SHA-256 of payload + 25 kHz-rounded frequency +
+    60 s time bucket (Lilyshark Field Receipts). Import a `.witness`
+    sidecar or pass `--epoch` (unix seconds of tick 0). Two captures that
+    share a key heard the same over-the-air frame. Without a wall clock,
+    identical payload hashes still corroborate.
 
 - **gadgets**: Flipper Zero, Hak5 Pineapple, ESP32 Marauder, Pwnagotchi,
   Deauther, Biscuit, **Lilyshark T-Deck** (`Lilyshark <short>` over the

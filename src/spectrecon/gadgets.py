@@ -226,6 +226,8 @@ def catalog_rows() -> list[dict]:
 
 def apply(devices: list[dict]) -> None:
     """Stamp gadget_* fields onto debrief device dicts in place."""
+    from .lscap import parse_lilyshark_name
+
     for d in devices:
         hit = identify(
             ssid=d.get("ssid"),
@@ -237,3 +239,12 @@ def apply(devices: list[dict]) -> None:
         d["gadget_id"] = hit.id if hit else None
         d["gadget_family"] = hit.family if hit else None
         d["gadget_via"] = hit.via if hit else None
+        parsed = parse_lilyshark_name(d.get("ssid") or d.get("name"))
+        if parsed and parsed.get("short"):
+            d["lilyshark_short"] = parsed["short"]
+            d["from_bang"] = parsed.get("from_bang")
+            if hit is None:
+                d["gadget"] = "Lilyshark T-Deck"
+                d["gadget_id"] = "lilyshark-tdeck"
+                d["gadget_family"] = "rig"
+                d["gadget_via"] = "name"

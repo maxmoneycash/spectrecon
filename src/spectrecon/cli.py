@@ -674,13 +674,17 @@ def els_import(
 def import_capture(
     csv_file: Path = typer.Argument(
         ..., help="WiGLE CSV, Kismet .kismet, or Lilyshark .lscap."),
+    epoch: Optional[int] = typer.Option(
+        None, "--epoch",
+        help="Unix seconds of .lscap tick 0 (GPS wall-clock for witness keys). "
+             "A capture.lscap.witness sidecar supplies this when present."),
     db: Path = typer.Option(DB_PATH, "--db"),
 ) -> None:
     """Import a capture: WiGLE CSV, Kismet log, or Lilyshark .lscap."""
     if not csv_file.exists():
         err.print(f"[red]{csv_file} not found[/red]")
         raise typer.Exit(1)
-    n = ingest_mod.import_capture(db, csv_file)
+    n = ingest_mod.import_capture(db, csv_file, epoch=epoch)
     if n == 0:
         err.print("[yellow]no observations parsed[/yellow]")
         raise typer.Exit(1)
@@ -735,11 +739,21 @@ def debrief(
               ["gadget", "gadget_family", "ssid", "bssid", "obs_type",
                "rssi", "gadget_via"],
               title="RF gadgets / audit rigs / mesh nodes")
+    if result.get("capturing_decks"):
+        _emit(result["capturing_decks"], False,
+              ["identity", "from_bang", "short", "tx_frames", "ble_name",
+               "position_via", "lat", "lon"],
+              title="capturing T-Deck (TX frames + BLE Lilyshark XXXX)")
     if result.get("lora"):
         _emit(result["lora"], False,
-              ["from_bang", "frames", "rssi_min", "rssi_max", "freq_hz",
-               "lilyshark_deck", "gadget", "mesh_name", "mesh_source"],
-              title="LoRa heard (Lilyshark .lscap → mesh.nodes)")
+              ["identity", "from_bang", "role", "rx_frames", "tx_frames",
+               "direct_frames", "lilyshark_short", "gadget", "mesh_name",
+               "position_via", "witnesses"],
+              title="LoRa heard (Lilyshark .lscap → mesh.nodes / Field BLE)")
+    if result.get("lora_corroborated"):
+        _emit(result["lora_corroborated"], False,
+              ["via", "decks", "frames", "captures", "identities"],
+              title="witnessed frames (same over-the-air bytes, two+ captures)")
     _emit(result["anomalies"], False,
           ["bssid", "ssid", "rssi", "obs_type", "sightings", "lat", "lon"],
           title=f"anomalies (no licensed infrastructure within {anomaly_km} km)")
